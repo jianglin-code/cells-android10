@@ -17,6 +17,7 @@
 #include <linux/export.h>
 #include <linux/nsproxy.h>
 #include <linux/init_task.h>
+#include <linux/fs_struct.h>
 #include <linux/mnt_namespace.h>
 #include <linux/utsname.h>
 #include <linux/pid_namespace.h>
@@ -26,6 +27,9 @@
 #include <linux/file.h>
 #include <linux/syscalls.h>
 #include <linux/cgroup.h>
+#ifdef CONFIG_DRV_NS
+#include <linux/drv_namespace.h>
+#endif
 
 static struct kmem_cache *nsproxy_cachep;
 
@@ -42,6 +46,9 @@ struct nsproxy init_nsproxy = {
 #endif
 #ifdef CONFIG_CGROUPS
 	.cgroup_ns		= &init_cgroup_ns,
+#endif
+#ifdef CONFIG_DRV_NS
+	.drv_ns			= &init_drv_ns,
 #endif
 };
 
@@ -109,8 +116,21 @@ static struct nsproxy *create_new_namespaces(unsigned long flags,
 		goto out_net;
 	}
 
+#ifdef CONFIG_DRV_NS
+	new_nsp->drv_ns = copy_drv_ns(flags, tsk, new_nsp->pid_ns_for_children);
+	if (IS_ERR(new_nsp->drv_ns)) {
+		err = PTR_ERR(new_nsp->drv_ns);
+		goto out_drv;
+	}
+#endif
+
 	return new_nsp;
 
+#ifdef CONFIG_DRV_NS
+out_drv:
+	if (new_nsp->net_ns)
+		put_net(new_nsp->net_ns);
+#endif
 out_net:
 	put_cgroup_ns(new_nsp->cgroup_ns);
 out_cgroup:
@@ -180,7 +200,13 @@ void free_nsproxy(struct nsproxy *ns)
 	if (ns->pid_ns_for_children)
 		put_pid_ns(ns->pid_ns_for_children);
 	put_cgroup_ns(ns->cgroup_ns);
+#ifdef CONFIG_DRV_NS
+	if (ns->net_ns)
+		put_net(ns->net_ns);
+	put_drv_ns(ns->drv_ns);
+#else
 	put_net(ns->net_ns);
+#endif
 	kmem_cache_free(nsproxy_cachep, ns);
 }
 
@@ -240,6 +266,9 @@ SYSCALL_DEFINE2(setns, int, fd, int, nstype)
 	struct file *file;
 	struct ns_common *ns;
 	int err;
+	//char *buf, *path = NULL;
+	//struct fs_struct *fs = current->fs;
+	//struct path old_root = fs->root;
 
 	file = proc_ns_fget(fd);
 	if (IS_ERR(file))
@@ -261,6 +290,22 @@ SYSCALL_DEFINE2(setns, int, fd, int, nstype)
 		free_nsproxy(new_nsproxy);
 		goto out;
 	}
+
+	/*if((nstype == CLONE_NEWNS) &&
+		(current_drv_ns() != &init_drv_ns) ){
+		buf = (char *)__get_free_page(GFP_ATOMIC);
+		if (buf) {
+			path = dentry_path_raw(old_root.dentry, buf, PAGE_SIZE);
+			printk(KERN_WARNING "%s: %s\n", __func__, path);
+			free_page((unsigned long)buf);
+		}
+
+		path_get(&old_root);
+		set_fs_pwd(current->fs, &old_root);
+		set_fs_root(current->fs, &old_root);
+		path_put(&old_root);
+	}*/
+
 	switch_task_namespaces(tsk, new_nsproxy);
 out:
 	fput(file);

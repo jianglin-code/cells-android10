@@ -19,6 +19,9 @@
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 
+#ifdef CONFIG_DRV_NS
+#include <linux/drv_namespace.h>
+#endif
 #include "power.h"
 
 static DEFINE_MUTEX(wakelocks_lock);
@@ -27,6 +30,9 @@ struct wakelock {
 	char			*name;
 	struct rb_node		node;
 	struct wakeup_source	ws;
+#ifdef CONFIG_DRV_NS
+	struct drv_namespace * drv_ns;
+#endif
 #ifdef CONFIG_PM_WAKELOCKS_GC
 	struct list_head	lru;
 #endif
@@ -45,7 +51,11 @@ ssize_t pm_show_wakelocks(char *buf, bool show_active)
 
 	for (node = rb_first(&wakelocks_tree); node; node = rb_next(node)) {
 		wl = rb_entry(node, struct wakelock, node);
+#ifdef CONFIG_DRV_NS
+		if (wl->ws.active == show_active && wl->drv_ns == current_drv_ns())
+#else
 		if (wl->ws.active == show_active)
+#endif
 			str += scnprintf(str, end - str, "%s ", wl->name);
 	}
 	if (str > buf)
@@ -159,7 +169,11 @@ static struct wakelock *wakelock_lookup_add(const char *name, size_t len,
 		parent = *node;
 		wl = rb_entry(*node, struct wakelock, node);
 		diff = strncmp(name, wl->name, len);
+#ifdef CONFIG_DRV_NS
+		if (diff == 0 && wl->drv_ns == current_drv_ns()) {
+#else
 		if (diff == 0) {
+#endif
 			if (wl->name[len])
 				diff = -1;
 			else
@@ -187,6 +201,9 @@ static struct wakelock *wakelock_lookup_add(const char *name, size_t len,
 		return ERR_PTR(-ENOMEM);
 	}
 	wl->ws.name = wl->name;
+#ifdef CONFIG_DRV_NS
+	wl->drv_ns = current_drv_ns();
+#endif
 	wakeup_source_add(&wl->ws);
 	rb_link_node(&wl->node, parent, node);
 	rb_insert_color(&wl->node, &wakelocks_tree);

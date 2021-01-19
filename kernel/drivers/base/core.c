@@ -28,9 +28,29 @@
 #include <linux/pm_runtime.h>
 #include <linux/netdevice.h>
 #include <linux/sysfs.h>
+#ifdef CONFIG_DRV_NS
+#include <linux/drv_namespace.h>
+#endif
 
 #include "base.h"
 #include "power/power.h"
+
+#ifdef CONFIG_DRV_NS
+struct drv_namespace init_drv_ns = {
+	.active = true,
+	.count = ATOMIC_INIT(2),  /* extra reference for active_dev_ns */
+	.pid_ns = &init_pid_ns,
+	.tag = { 'i', 'n', 'i', 't', 0 },
+	.notifiers = BLOCKING_NOTIFIER_INIT(init_drv_ns.notifiers),
+	.timestamp = 0,
+	.mutex = __MUTEX_INITIALIZER(init_drv_ns.mutex),
+	.info = { NULL },
+};
+EXPORT_SYMBOL_GPL(init_drv_ns);
+
+struct drv_namespace *active_drv_ns = &init_drv_ns;
+EXPORT_SYMBOL_GPL(active_drv_ns);
+#endif
 
 #ifdef CONFIG_SYSFS_DEPRECATED
 #ifdef CONFIG_SYSFS_DEPRECATED_V2

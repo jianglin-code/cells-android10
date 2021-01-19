@@ -27,6 +27,9 @@
 #include <linux/device.h>
 #include <linux/cdev.h>
 #include "input-compat.h"
+#ifdef CONFIG_DRV_NS
+#include <linux/drv_namespace.h>
+#endif
 
 enum evdev_clock_type {
 	EV_CLK_REAL = 0,
@@ -48,6 +51,10 @@ struct evdev {
 	bool exist;
 };
 
+#ifdef CONFIG_DRV_NS
+struct evdev_drv_ns;
+#endif
+
 struct evdev_client {
 	unsigned int head;
 	unsigned int tail;
@@ -55,6 +62,13 @@ struct evdev_client {
 	spinlock_t buffer_lock; /* protects access to buffer, head and tail */
 	struct fasync_struct *fasync;
 	struct evdev *evdev;
+#ifdef CONFIG_DRV_NS
+	struct evdev_drv_ns *evdev_ns;
+	struct list_head list;
+	bool grab;
+	struct list_head keys_down;
+	bool is_always_active;
+#endif
 	struct list_head node;
 	unsigned int clk_type;
 	bool revoked;
@@ -62,6 +76,222 @@ struct evdev_client {
 	unsigned int bufsize;
 	struct input_event buffer[];
 };
+
+#ifdef CONFIG_DRV_NS
+struct evdev_drv_ns {
+	struct mutex mutex;
+	struct list_head clients;
+	struct drv_ns_info drv_ns_info;
+};
+
+struct keydown {
+	u16 code;
+	struct list_head link;
+};
+
+static void set_keydown(struct evdev_client *client, u16 code)
+{
+	struct keydown *kd;
+	list_for_each_entry(kd, &client->keys_down, link) {
+		if (kd->code == code)
+			return;
+	}
+	kd = kmalloc(sizeof(*kd), GFP_ATOMIC);
+	if (!kd)
+		return;
+	kd->code = code;
+	list_add(&kd->link, &client->keys_down);
+}
+
+static void clear_keydown(struct evdev_client *client, u16 code)
+{
+	struct keydown *kd, *n;
+	list_for_each_entry_safe(kd, n, &client->keys_down, link) {
+		if (kd->code == code) {
+			list_del(&kd->link);
+			kfree(kd);
+			return;
+		}
+	}
+}
+/* evdev_ns_id, get_evdev_ns(), get_evdev_ns_cur(), put_evdev_ns() */
+DEFINE_DRV_NS_INFO(evdev)
+
+static bool is_always_active_evdev(struct evdev_client *client){
+	static char *always_active_evdev[] = {
+		"STM VL53L0 proximity sensor",
+		"sdm670-intcodec-b4-snd-card Headset Jack",
+		"sdm670-intcodec-b4-snd-card Button Jack",
+		NULL
+	};
+
+	char **evdevname;
+	for (evdevname = always_active_evdev; *evdevname != NULL; evdevname++){
+		if(strncmp(client->evdev->handle.dev->name, *evdevname, strlen(*evdevname)) == 0)
+			return true;
+	}
+
+	return false;
+}
+
+/* indicate whether an evdev client is in the foreground */
+static bool evdev_client_is_active(struct evdev_client *client)
+{
+	return client->is_always_active || is_active_evdev_drv_ns(client->evdev_ns);
+}
+
+static struct notifier_block evdev_ns_switch_notifier;
+static int evdev_grab(struct evdev *evdev, struct evdev_client *client);
+static int evdev_ungrab(struct evdev *evdev, struct evdev_client *client);
+static void __pass_event(struct evdev_client *client,const struct input_event *event);
+
+/* evdev_ns helpers */
+static struct drv_ns_info *evdev_drvns_create(struct drv_namespace *drv_ns)
+{
+	struct evdev_drv_ns *evdev_ns;
+	struct drv_ns_info *drv_ns_info;
+
+	evdev_ns = kzalloc(sizeof(*evdev_ns), GFP_KERNEL);
+	if (!evdev_ns)
+		return ERR_PTR(-ENOMEM);
+
+	mutex_init(&evdev_ns->mutex);
+	INIT_LIST_HEAD(&evdev_ns->clients);
+
+	pr_info("new evdev_drv_ns %p (d %p)\n", evdev_ns, drv_ns);
+
+	drv_ns_info = &evdev_ns->drv_ns_info;
+
+	drv_ns_info->nb = evdev_ns_switch_notifier;
+	drv_ns_register_notify(drv_ns, &drv_ns_info->nb);
+
+	return &evdev_ns->drv_ns_info;
+}
+
+static void evdev_drvns_release(struct drv_ns_info *drv_ns_info)
+{
+	struct evdev_drv_ns *evdev_ns;
+
+	evdev_ns = container_of(drv_ns_info, struct evdev_drv_ns, drv_ns_info);
+
+	pr_info("del evdev_drv_ns %p (d %p)\n", evdev_ns, drv_ns_info->drv_ns);
+	drv_ns_unregister_notify(drv_ns_info->drv_ns, &drv_ns_info->nb);
+
+	kfree(evdev_ns);
+}
+
+static struct drv_ns_ops evdev_ns_ops = {
+	.create = evdev_drvns_create,
+	.release = evdev_drvns_release,
+};
+
+static int evdev_ns_track_client(struct evdev_client *client)
+{
+	struct evdev_drv_ns *evdev_ns;
+
+	evdev_ns = get_evdev_ns_cur();
+	if (!evdev_ns)
+		return -ENOMEM;
+
+	//pr_info("track new client 0x%p in evdev_ns 0x%p (drv_ns 0x%p)\n",
+	//	client, evdev_ns, evdev_ns->drv_ns_info.drv_ns);
+
+	client->is_always_active = is_always_active_evdev(client);
+	client->evdev_ns = evdev_ns;
+	client->grab = false;
+	INIT_LIST_HEAD(&client->keys_down);
+
+	mutex_lock(&evdev_ns->mutex);
+	list_add(&client->list, &evdev_ns->clients);
+	mutex_unlock(&evdev_ns->mutex);
+
+	return 0;
+}
+
+static void evdev_ns_untrack_client(struct evdev_client *client)
+{
+	struct evdev_drv_ns *evdev_ns;
+
+	evdev_ns = client->evdev_ns;
+
+	//pr_info("untrack client 0x%p in evdev_ns 0x%p (drv_ns 0x%p)\n",
+	//	client, evdev_ns, evdev_ns->drv_ns_info.drv_ns);
+
+	mutex_lock(&evdev_ns->mutex);
+	list_del(&client->list);
+	mutex_unlock(&evdev_ns->mutex);
+
+	put_evdev_ns(evdev_ns);
+}
+
+/* drv_ns and resepctive fb_drv_ns protected by caller */
+static int evdev_ns_switch_callback(struct notifier_block *self,
+				    unsigned long action, void *data)
+{
+	struct drv_namespace *drv_ns = data;
+	struct evdev_drv_ns *evdev_ns;
+	struct evdev_client *client;
+	struct keydown *kd, *n;
+	struct input_event event;
+	ktime_t ev_time[EV_CLK_MAX];
+
+	evdev_ns = find_evdev_ns(drv_ns);
+	WARN(evdev_ns == NULL, "drvns 0x%p: no matching evdev_ns\n", drv_ns);
+
+	mutex_lock(&evdev_ns->mutex);
+	switch (action) {
+	case DRV_NS_EVENT_ACTIVATE:
+		list_for_each_entry(client, &evdev_ns->clients, list)
+		{
+			mutex_lock(&client->evdev->mutex);
+			if (client->grab)
+				evdev_grab(client->evdev, client);
+			mutex_unlock(&client->evdev->mutex);
+		}
+		break;
+	case DRV_NS_EVENT_DEACTIVATE:
+		ev_time[EV_CLK_MONO] = ktime_get();
+		ev_time[EV_CLK_REAL] = ktime_mono_to_real(ev_time[EV_CLK_MONO]);
+		ev_time[EV_CLK_BOOT] = ktime_mono_to_any(ev_time[EV_CLK_MONO],TK_OFFS_BOOT);
+		event.type = EV_KEY;
+		event.value = 0;
+		event.code = 0;
+		list_for_each_entry(client, &evdev_ns->clients, list)
+		{
+			/* release any pressed keys in the inactive client */
+			list_for_each_entry_safe(kd, n,
+						 &client->keys_down, link) {
+				event.code = kd->code;
+				event.time = ktime_to_timeval(ev_time[client->clk_type]);
+				pr_info("sending code %d KEY_UP to %s",kd->code, drv_ns->tag);
+				__pass_event(client, &event);
+			}
+
+			if (event.code) {
+				ev_time[EV_CLK_MONO] = ktime_get();
+				ev_time[EV_CLK_REAL] = ktime_mono_to_real(ev_time[EV_CLK_MONO]);
+				ev_time[EV_CLK_BOOT] = ktime_mono_to_any(ev_time[EV_CLK_MONO],TK_OFFS_BOOT);
+				event.code = SYN_REPORT;
+				event.time = ktime_to_timeval(ev_time[client->clk_type]);
+				__pass_event(client, &event);
+				wake_up_interruptible(&client->evdev->wait);
+			}
+
+			mutex_lock(&client->evdev->mutex);
+			if (client->evdev->grab == client)
+				evdev_ungrab(client->evdev, client);
+			mutex_unlock(&client->evdev->mutex);
+		}
+		break;
+	}
+	mutex_unlock(&evdev_ns->mutex);
+	return 0;
+}
+
+static struct notifier_block evdev_ns_switch_notifier = {
+	.notifier_call = evdev_ns_switch_callback,
+};
+#endif /* CONFIG_DRV_NS */
 
 static size_t evdev_get_mask_cnt(unsigned int type)
 {
@@ -253,6 +483,16 @@ static void __pass_event(struct evdev_client *client,
 		client->packet_head = client->head;
 		kill_fasync(&client->fasync, SIGIO, POLL_IN);
 	}
+
+#ifdef CONFIG_DRV_NS
+	if (event->type == EV_KEY) {
+		if (event->value)
+			set_keydown(client, event->code);
+		else
+			clear_keydown(client, event->code);
+	}
+#endif
+
 }
 
 static void evdev_pass_values(struct evdev_client *client,
@@ -318,8 +558,15 @@ static void evdev_events(struct input_handle *handle,
 	if (client)
 		evdev_pass_values(client, vals, count, ev_time);
 	else
-		list_for_each_entry_rcu(client, &evdev->client_list, node)
+		list_for_each_entry_rcu(client, &evdev->client_list, node){
+
+#ifdef CONFIG_DRV_NS
+			if (!evdev_client_is_active(client))
+				continue;
+#endif
+
 			evdev_pass_values(client, vals, count, ev_time);
+		}
 
 	rcu_read_unlock();
 }
@@ -379,6 +626,10 @@ static int evdev_grab(struct evdev *evdev, struct evdev_client *client)
 	if (error)
 		return error;
 
+#ifdef CONFIG_DRV_NS
+	client->grab = true;
+#endif
+
 	rcu_assign_pointer(evdev->grab, client);
 
 	return 0;
@@ -391,6 +642,10 @@ static int evdev_ungrab(struct evdev *evdev, struct evdev_client *client)
 
 	if (grab != client)
 		return  -EINVAL;
+
+#ifdef CONFIG_DRV_NS
+	client->grab = false;
+#endif
 
 	rcu_assign_pointer(evdev->grab, NULL);
 	synchronize_rcu();
@@ -472,6 +727,10 @@ static int evdev_release(struct inode *inode, struct file *file)
 	evdev_ungrab(evdev, client);
 	mutex_unlock(&evdev->mutex);
 
+#ifdef CONFIG_DRV_NS
+	evdev_ns_untrack_client(client);
+#endif
+
 	evdev_detach_client(evdev, client);
 
 	for (i = 0; i < EV_CNT; ++i)
@@ -511,6 +770,15 @@ static int evdev_open(struct inode *inode, struct file *file)
 	client->bufsize = bufsize;
 	spin_lock_init(&client->buffer_lock);
 	client->evdev = evdev;
+
+#ifdef CONFIG_DRV_NS
+	error = evdev_ns_track_client(client);
+	if (error)
+		goto err_free_client;
+
+	pr_info("evdev_client:%s is_always_active=%d \n",evdev->handle.dev->name,client->is_always_active);
+#endif
+
 	evdev_attach_client(evdev, client);
 
 	error = evdev_open_device(evdev);
@@ -523,6 +791,9 @@ static int evdev_open(struct inode *inode, struct file *file)
 	return 0;
 
  err_free_client:
+#ifdef CONFIG_DRV_NS
+	evdev_ns_untrack_client(client);
+#endif
 	evdev_detach_client(evdev, client);
 	kvfree(client);
 	return error;
@@ -555,6 +826,11 @@ static ssize_t evdev_write(struct file *file, const char __user *buffer,
 			goto out;
 		}
 		retval += input_event_size();
+
+#ifdef CONFIG_DRV_NS
+		if (!evdev_client_is_active(client))
+			continue;
+#endif
 
 		input_inject_event(&evdev->handle,
 				   event.type, event.code, event.value);
@@ -1098,12 +1374,21 @@ static long evdev_do_ioctl(struct file *file, unsigned int cmd,
 		if (get_user(v, ip + 1))
 			return -EFAULT;
 
+#ifdef CONFIG_DRV_NS
+		if (!evdev_client_is_active(client))
+			return 0;
+#endif
+
 		input_inject_event(&evdev->handle, EV_REP, REP_DELAY, u);
 		input_inject_event(&evdev->handle, EV_REP, REP_PERIOD, v);
 
 		return 0;
 
 	case EVIOCRMFF:
+#ifdef CONFIG_DRV_NS
+		if (!evdev_client_is_active(client))
+			return 0;
+#endif
 		return input_ff_erase(dev, (int)(unsigned long) p, file);
 
 	case EVIOCGEFFECTS:
@@ -1114,6 +1399,15 @@ static long evdev_do_ioctl(struct file *file, unsigned int cmd,
 		return 0;
 
 	case EVIOCGRAB:
+#ifdef CONFIG_DRV_NS
+		if (!evdev_client_is_active(client)) {
+			if (p)
+				client->grab = true;
+			else
+				client->grab = false;
+			return 0;
+		} /* else */
+#endif
 		if (p)
 			return evdev_grab(evdev, client);
 		else
@@ -1159,6 +1453,10 @@ static long evdev_do_ioctl(struct file *file, unsigned int cmd,
 		return evdev_handle_get_keycode(dev, p);
 
 	case EVIOCSKEYCODE:
+#ifdef CONFIG_DRV_NS
+		if (!evdev_client_is_active(client))
+			return 0;
+#endif
 		return evdev_handle_set_keycode(dev, p);
 
 	case EVIOCGKEYCODE_V2:
@@ -1207,6 +1505,11 @@ static long evdev_do_ioctl(struct file *file, unsigned int cmd,
 		return str_to_user(dev->uniq, size, p);
 
 	case EVIOC_MASK_SIZE(EVIOCSFF):
+#ifdef CONFIG_DRV_NS
+		if (!evdev_client_is_active(client))
+			return 0;
+#endif
+
 		if (input_ff_effect_from_user(p, size, &effect))
 			return -EFAULT;
 
@@ -1248,6 +1551,11 @@ static long evdev_do_ioctl(struct file *file, unsigned int cmd,
 	}
 
 	if (_IOC_DIR(cmd) == _IOC_WRITE) {
+
+#ifdef CONFIG_DRV_NS
+		if (!evdev_client_is_active(client))
+			return 0;
+#endif
 
 		if ((_IOC_NR(cmd) & ~ABS_MAX) == _IOC_NR(EVIOCSABS(0))) {
 
@@ -1469,11 +1777,26 @@ static struct input_handler evdev_handler = {
 
 static int __init evdev_init(void)
 {
-	return input_register_handler(&evdev_handler);
+	int ret;
+
+	ret = input_register_handler(&evdev_handler);
+	if (ret < 0)
+		return ret;
+#ifdef CONFIG_DRV_NS
+	ret = DRV_NS_REGISTER(evdev, "event dev");
+	if (ret < 0) {
+		input_unregister_handler(&evdev_handler);
+		return ret;
+	}
+#endif
+	return ret;
 }
 
 static void __exit evdev_exit(void)
 {
+#ifdef CONFIG_DRV_NS
+	DRV_NS_UNREGISTER(evdev);
+#endif
 	input_unregister_handler(&evdev_handler);
 }
 
