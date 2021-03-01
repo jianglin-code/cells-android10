@@ -90,7 +90,7 @@ void SwitchRoot(const std::string& new_root) {
             PLOG(FATAL) << "Unable to move root mount to new_root, '" << new_root << "'";
         }
     }else{
-        LOG(INFO) << "NO Switching VM root'";
+        LOG(INFO) << "NO Switch VP root'";
     }
 
     if (chroot(".") != 0) {

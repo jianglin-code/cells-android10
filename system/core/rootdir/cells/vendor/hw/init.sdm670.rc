@@ -710,10 +710,10 @@ service ipacm /vendor/bin/ipacm
     user radio
     group radio inet
 
-service qti /vendor/bin/qti
-    class main
-    user radio
-    group radio net_raw diag usb net_admin
+#service qti /vendor/bin/qti
+#    class main
+#    user radio
+#    group radio net_raw diag usb net_admin
 
 service loc_launcher /vendor/bin/loc_launcher
     class late_start

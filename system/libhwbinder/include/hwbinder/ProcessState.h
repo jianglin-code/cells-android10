@@ -26,6 +26,8 @@
 
 #include <pthread.h>
 
+#define MAX_CONTEXT 6
+
 // ---------------------------------------------------------------------------
 namespace android {
 namespace hardware {
@@ -42,6 +44,7 @@ public:
 
             void                setContextObject(const sp<IBinder>& object);
             sp<IBinder>         getContextObject(const sp<IBinder>& caller);
+            sp<IBinder>         getMgrContextObject(int index);
 
             void                setContextObject(const sp<IBinder>& object,
                                                  const String16& name);
@@ -122,6 +125,7 @@ private:
     mutable Mutex               mLock;  // protects everything below.
 
             Vector<handle_entry>mHandleToObject;
+            handle_entry        mSystemContextMgrHandle[MAX_CONTEXT];
 
             bool                mManagesContexts;
             context_check_func  mBinderContextCheckFunc;

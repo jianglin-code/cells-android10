@@ -103,8 +103,6 @@ bool SetupMountNamespaces() {
     bootstrap_ns_fd.reset(OpenMountNamespace());
     bootstrap_ns_id = GetMountNamespaceId();
 
-    LOG(INFO) << "GetMountNamespaceId " << GetMountNamespaceId();
-
     // When APEXes are updatable (e.g. not-flattened), we create separate mount
     // namespaces for processes that are started before and after the APEX is
     // activated by apexd. In the namespace for pre-apexd processes, small
@@ -114,12 +112,10 @@ bool SetupMountNamespaces() {
     if (IsApexUpdatable() && !IsRecoveryMode()) {
         // Creating a new namespace by cloning, saving, and switching back to
         // the original namespace.
-
         if (unshare(CLONE_NEWNS) == -1) {
             PLOG(ERROR) << "Cannot create mount namespace";
             return false;
         }
-
         default_ns_fd.reset(OpenMountNamespace());
         default_ns_id = GetMountNamespaceId();
 
@@ -133,8 +129,7 @@ bool SetupMountNamespaces() {
         default_ns_id = GetMountNamespaceId();
     }
 
-    LOG(INFO) << "GetMountNamespaceId " << GetMountNamespaceId();
-    LOG(INFO) << "SetupMountNamespaces done ";
+    LOG(INFO) << "SetupMountNamespaces done";
     return success;
 }
 

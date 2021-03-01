@@ -41,6 +41,7 @@
 
 #define DEFAULT_BINDER_VM_SIZE ((1 * 1024 * 1024) - sysconf(_SC_PAGE_SIZE) * 2)
 #define DEFAULT_MAX_BINDER_THREADS 0
+#define INIT_SYSTEM_CONTEXT_MGR_HANDLE 100000000
 
 // -------------------------------------------------------------------------
 
@@ -100,6 +101,15 @@ void ProcessState::setContextObject(const sp<IBinder>& object)
 sp<IBinder> ProcessState::getContextObject(const sp<IBinder>& /*caller*/)
 {
     return getStrongProxyForHandle(0);
+}
+
+sp<IBinder> ProcessState::getMgrContextObject(int index)
+{
+    sp<IBinder> result;
+    if(index < 0 || index >= MAX_CONTEXT)
+        return result;
+
+    return getStrongProxyForHandle(INIT_SYSTEM_CONTEXT_MGR_HANDLE + index);
 }
 
 void ProcessState::setContextObject(const sp<IBinder>& object, const String16& name)
@@ -251,6 +261,10 @@ void ProcessState::setCallRestriction(CallRestriction restriction) {
 
 ProcessState::handle_entry* ProcessState::lookupHandleLocked(int32_t handle)
 {
+    if(handle >= INIT_SYSTEM_CONTEXT_MGR_HANDLE){
+        return &mSystemContextMgrHandle[handle - INIT_SYSTEM_CONTEXT_MGR_HANDLE];
+    }
+
     const size_t N=mHandleToObject.size();
     if (N <= (size_t)handle) {
         handle_entry e;
@@ -451,6 +465,12 @@ ProcessState::ProcessState(size_t mmap_size)
     }
     else {
         ALOGE("Binder driver could not be opened.  Terminating.");
+    }
+
+    for(int i=0; i < MAX_CONTEXT; i++)
+    {
+        mSystemContextMgrHandle[i].binder = nullptr;
+        mSystemContextMgrHandle[i].refs = nullptr;
     }
 }
 

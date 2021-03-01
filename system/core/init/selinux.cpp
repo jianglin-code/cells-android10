@@ -517,8 +517,6 @@ int SelinuxGetVendorAndroidVersion() {
 
 // This function initializes SELinux then execs init to run in the init SELinux context.
 int SetupSelinux(char** argv) {
-    Timer t;
-
     InitKernelLogging(argv);
 
     if (REBOOT_BOOTLOADER_ON_PANIC) {

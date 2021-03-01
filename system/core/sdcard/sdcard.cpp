@@ -564,5 +564,6 @@ int main(int argc, char **argv) {
     } else {
         run(source_path, label, uid, gid, userid, multi_user, full_write);
     }
+
     return 1;
 }

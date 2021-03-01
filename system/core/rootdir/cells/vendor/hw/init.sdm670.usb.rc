@@ -62,7 +62,7 @@ on charger
     write /config/usb_gadget/g1/bcdUSB 0x0200
     write /config/usb_gadget/g1/idVendor 0x18d1
     write /config/usb_gadget/g1/bcdDevice 0x0440
-    write /config/usb_gadget/g1/strings/0x409/serialnumber ${ro.serialno}
+    # write /config/usb_gadget/g1/strings/0x409/serialnumber ${ro.serialno}
     write /config/usb_gadget/g1/strings/0x409/manufacturer Google
     write /config/usb_gadget/g1/strings/0x409/product Pixel
     mkdir /config/usb_gadget/g1/functions/midi.gs5

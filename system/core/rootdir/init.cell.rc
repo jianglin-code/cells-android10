@@ -37,7 +37,7 @@ on early-init
     setprop ro.boot.vm 1
     setprop persist.sys.exit 1
     setprop persist.logd.logpersistd logcatd
-    setprop system_init.startsensorservice 0
+    # setprop system_init.startsensorservice 0
     setprop persist.sys.sdcardfs force_off
 
     # Run apexd-bootstrap so that APEXes that provide critical libraries

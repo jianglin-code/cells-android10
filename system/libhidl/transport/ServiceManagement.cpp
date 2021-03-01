@@ -23,6 +23,7 @@
 #include <fstream>
 #include <pthread.h>
 #include <unistd.h>
+#include <string.h>
 
 #include <mutex>
 #include <regex>
@@ -51,6 +52,8 @@
 #include <android/hidl/manager/1.2/BnHwServiceManager.h>
 #include <android/hidl/manager/1.2/BpHwServiceManager.h>
 #include <android/hidl/manager/1.2/IServiceManager.h>
+
+#include "cutils/properties.h"
 
 #define RE_COMPONENT    "[a-zA-Z_][a-zA-Z_0-9]*"
 #define RE_PATH         RE_COMPONENT "(?:[.]" RE_COMPONENT ")*"
@@ -234,6 +237,23 @@ sp<IServiceManager1_2> defaultServiceManager1_2() {
                 sleep(1);
             }
         }
+    }
+
+    return gDefaultServiceManager;
+}
+
+static sp<IServiceManager1_2> initdefaultServiceManager() {
+    using android::hidl::manager::V1_2::BnHwServiceManager;
+    using android::hidl::manager::V1_2::BpHwServiceManager;
+
+    std::mutex gDefaultServiceManagerLock;
+    sp<IServiceManager1_2> gDefaultServiceManager;
+
+    {
+        std::lock_guard<std::mutex> _l(gDefaultServiceManagerLock);
+        gDefaultServiceManager =
+            fromBinder<IServiceManager1_2, BpHwServiceManager, BnHwServiceManager>(
+                ProcessState::self()->getMgrContextObject(0));
     }
 
     return gDefaultServiceManager;
@@ -724,6 +744,29 @@ bool handleCastError(const Return<bool>& castReturn, const std::string& descript
     return false;
 }
 
+static bool getinithidlservice(const char* descriptor)
+{
+    static const char* inithidlservice[]={
+        "android.hardware.bluetooth",
+        "android.hardware.nfc",
+        NULL
+    };
+
+    char value[PROPERTY_VALUE_MAX];
+    property_get("ro.boot.vm", value, "1");
+    if (strcmp(value, "0") == 0) {
+        return false;
+    }
+
+    for(int i =0;  inithidlservice[i] != NULL;  i++){
+        if(strncmp(descriptor, inithidlservice[i], strlen( inithidlservice[i])) == 0){
+            ALOGD("getinithidlservice %s", descriptor);
+            return true;
+        }
+    }
+    return false;
+}
+
 sp<::android::hidl::base::V1_0::IBase> getRawServiceInternal(const std::string& descriptor,
                                                              const std::string& instance,
                                                              bool retry, bool getStub) {
@@ -736,7 +779,11 @@ sp<::android::hidl::base::V1_0::IBase> getRawServiceInternal(const std::string& 
     if (kIsRecovery) {
         transport = Transport::PASSTHROUGH;
     } else {
-        sm = defaultServiceManager1_1();
+        if(getinithidlservice(descriptor.c_str())){
+            sm = initdefaultServiceManager();
+        }else{
+            sm = defaultServiceManager1_1();
+        }
         if (sm == nullptr) {
             ALOGE("getService: defaultServiceManager() is null");
             return nullptr;
@@ -784,6 +831,9 @@ sp<::android::hidl::base::V1_0::IBase> getRawServiceInternal(const std::string& 
             ALOGE("getService: defaultServiceManager()->get returns %s for %s/%s.",
                   ret.description().c_str(), descriptor.c_str(), instance.c_str());
             break;
+        }else{
+            ALOGD("getService: defaultServiceManager()->get returns %s for %s/%s.",
+                  ret.description().c_str(), descriptor.c_str(), instance.c_str());
         }
         sp<IBase> base = ret;
         if (base != nullptr) {

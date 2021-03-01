@@ -128,7 +128,7 @@ static void LoadBootScripts(ActionManager& action_manager, ServiceList& service_
     Parser parser = CreateParser(action_manager, service_list);
 
     if(access("/.cell", F_OK) == 0){
-        LOG(INFO) << "Load VM rc";
+        LOG(INFO) << "LOAD VP RC...";
         parser.ParseConfig("/init.rc");
         if (!parser.ParseConfig("/cells/system")) {
             late_import_paths.emplace_back("/cells/system");
@@ -644,51 +644,39 @@ int SecondStageMain(int argc, char** argv) {
 
     // Enable seccomp if global boot option was passed (otherwise it is enabled in zygote).
     GlobalSeccomp();
-    LOG(INFO) << "GlobalSeccomp... ";
 
     // Set up a session keyring that all processes will have access to. It
     // will hold things like FBE encryption keys. No process should override
     // its session keyring.
     keyctl_get_keyring_ID(KEY_SPEC_SESSION_KEYRING, 1);
-    LOG(INFO) << "keyctl_get_keyring_ID... ";
 
     // Indicate that booting is in progress to background fw loaders, etc.
     close(open("/dev/.booting", O_WRONLY | O_CREAT | O_CLOEXEC, 0000));
-    LOG(INFO) << "booting... ";
 
     property_init();
-    LOG(INFO) << "property_init... ";
 
     // If arguments are passed both on the command line and in DT,
     // properties set in DT always have priority over the command-line ones.
     process_kernel_dt();
-    LOG(INFO) << "process_kernel_dt... ";
     process_kernel_cmdline();
-    LOG(INFO) << "process_kernel_cmdline... ";
 
     // Propagate the kernel variables to internal variables
     // used by init as well as the current required properties.
     export_kernel_boot_props();
-    LOG(INFO) << "export_kernel_boot_props... ";
-
-    LOG(INFO) << "cell ... " << access("/.cell", F_OK) ;
 
     // Make the time that init started available for bootstat to log.
     property_set("ro.boottime.init", getenv("INIT_STARTED_AT"));
     property_set("ro.boottime.init.selinux", getenv("INIT_SELINUX_TOOK"));
-    LOG(INFO) << "ro.boottime.init.selinux... ";
 
     // Set libavb version for Framework-only OTA match in Treble build.
     const char* avb_version = getenv("INIT_AVB_VERSION");
     if (avb_version) property_set("ro.boot.avb_version", avb_version);
-    LOG(INFO) << "ro.boot.avb_version... ";
 
     // See if need to load debug props to allow adb root, when the device is unlocked.
     const char* force_debuggable_env = getenv("INIT_FORCE_DEBUGGABLE");
     if (force_debuggable_env && AvbHandle::IsDeviceUnlocked()) {
         load_debug_prop = "true"s == force_debuggable_env;
     }
-    LOG(INFO) << "INIT_FORCE_DEBUGGABLE... ";
 
     // Clean up our environment.
     unsetenv("INIT_STARTED_AT");
@@ -701,38 +689,23 @@ int SecondStageMain(int argc, char** argv) {
     SelabelInitialize();
     SelinuxRestoreContext();
 
-    LOG(INFO) << "SelinuxRestoreContext... ";
-
     Epoll epoll;
     if (auto result = epoll.Open(); !result) {
         PLOG(FATAL) << result.error();
     }
 
     InstallSignalFdHandler(&epoll);
-    LOG(INFO) << "InstallSignalFdHandler... ";
 
     property_load_boot_defaults(load_debug_prop);
-    LOG(INFO) << "property_load_boot_defaults... ";
-
     UmountDebugRamdisk();
-    LOG(INFO) << "UmountDebugRamdisk... ";
-
     fs_mgr_vendor_overlay_mount_all();
-    LOG(INFO) << "fs_mgr_vendor_overlay_mount_all... ";
-
     export_oem_lock_status();
-    LOG(INFO) << "export_oem_lock_status... ";
-
     StartPropertyService(&epoll);
-    LOG(INFO) << "StartPropertyService... ";
-
     MountHandler mount_handler(&epoll);
     set_usb_controller();
-    LOG(INFO) << "set_usb_controller... ";
 
     const BuiltinFunctionMap function_map;
     Action::set_function_map(&function_map);
-    LOG(INFO) << "set_function_map... ";
 
     if (!SetupMountNamespaces()) {
         PLOG(FATAL) << "SetupMountNamespaces failed";
