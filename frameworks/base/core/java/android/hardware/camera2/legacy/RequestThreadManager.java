@@ -325,7 +325,7 @@ public class RequestThreadManager {
             throw new IllegalStateException(
                     "Preview capture called with no preview surfaces configured.");
         }
-        Log.e(TAG, "Stack:" + Log.getStackTraceString(new Throwable()));
+
         mPreviewTexture.setDefaultBufferSize(mIntermediateBufferSize.getWidth(),
                 mIntermediateBufferSize.getHeight());
         mCamera.setPreviewTexture(mPreviewTexture);

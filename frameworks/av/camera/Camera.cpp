@@ -45,7 +45,7 @@ CameraTraits<Camera>::TCamConnectService CameraTraits<Camera>::fnConnectService 
 // construct a camera client from an existing camera remote
 sp<Camera> Camera::create(const sp<::android::hardware::ICamera>& camera)
 {
-     ALOGD("create");
+     ALOGV("create");
      if (camera == 0) {
          ALOGE("camera remote is a NULL pointer");
          return 0;
@@ -82,7 +82,7 @@ status_t Camera::connectLegacy(int cameraId, int halVersion,
         int clientUid,
         sp<Camera>& camera)
 {
-    ALOGD("%s: connect legacy camera device", __FUNCTION__);
+    ALOGV("%s: connect legacy camera device", __FUNCTION__);
     sp<Camera> c = new Camera(cameraId);
     sp<::android::hardware::ICameraClient> cl = c;
     status_t status = NO_ERROR;
@@ -136,7 +136,7 @@ status_t Camera::connectLegacy(int cameraId, int halVersion,
 
 status_t Camera::reconnect()
 {
-    ALOGD("reconnect");
+    ALOGV("reconnect");
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return NO_INIT;
     return c->connect(this);
@@ -159,7 +159,7 @@ status_t Camera::unlock()
 // pass the buffered IGraphicBufferProducer to the camera service
 status_t Camera::setPreviewTarget(const sp<IGraphicBufferProducer>& bufferProducer)
 {
-    ALOGD("setPreviewTarget(%p)", bufferProducer.get());
+    ALOGV("setPreviewTarget(%p)", bufferProducer.get());
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return NO_INIT;
     ALOGD_IF(bufferProducer == 0, "app passed NULL surface");
@@ -168,7 +168,7 @@ status_t Camera::setPreviewTarget(const sp<IGraphicBufferProducer>& bufferProduc
 
 status_t Camera::setVideoTarget(const sp<IGraphicBufferProducer>& bufferProducer)
 {
-    ALOGD("setVideoTarget(%p)", bufferProducer.get());
+    ALOGV("setVideoTarget(%p)", bufferProducer.get());
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return NO_INIT;
     ALOGD_IF(bufferProducer == 0, "app passed NULL video surface");
@@ -178,7 +178,7 @@ status_t Camera::setVideoTarget(const sp<IGraphicBufferProducer>& bufferProducer
 // start preview mode
 status_t Camera::startPreview()
 {
-    ALOGD("startPreview");
+    ALOGV("startPreview");
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return NO_INIT;
     return c->startPreview();
@@ -186,7 +186,7 @@ status_t Camera::startPreview()
 
 status_t Camera::setVideoBufferMode(int32_t videoBufferMode)
 {
-    ALOGD("setVideoBufferMode: %d", videoBufferMode);
+    ALOGV("setVideoBufferMode: %d", videoBufferMode);
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return NO_INIT;
     return c->setVideoBufferMode(videoBufferMode);
@@ -195,7 +195,7 @@ status_t Camera::setVideoBufferMode(int32_t videoBufferMode)
 // start recording mode, must call setPreviewTarget first
 status_t Camera::startRecording()
 {
-    ALOGD("startRecording");
+    ALOGV("startRecording");
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return NO_INIT;
     return c->startRecording();
@@ -204,7 +204,7 @@ status_t Camera::startRecording()
 // stop preview mode
 void Camera::stopPreview()
 {
-    ALOGD("stopPreview");
+    ALOGV("stopPreview");
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return;
     c->stopPreview();
@@ -213,7 +213,7 @@ void Camera::stopPreview()
 // stop recording mode
 void Camera::stopRecording()
 {
-    ALOGD("stopRecording");
+    ALOGV("stopRecording");
     {
         Mutex::Autolock _l(mLock);
         mRecordingProxyListener.clear();
@@ -226,7 +226,7 @@ void Camera::stopRecording()
 // release a recording frame
 void Camera::releaseRecordingFrame(const sp<IMemory>& mem)
 {
-    ALOGD("releaseRecordingFrame");
+    ALOGV("releaseRecordingFrame");
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return;
     c->releaseRecordingFrame(mem);
@@ -234,7 +234,7 @@ void Camera::releaseRecordingFrame(const sp<IMemory>& mem)
 
 void Camera::releaseRecordingFrameHandle(native_handle_t* handle)
 {
-    ALOGD("releaseRecordingFrameHandle");
+    ALOGV("releaseRecordingFrameHandle");
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return;
     c->releaseRecordingFrameHandle(handle);
@@ -242,7 +242,7 @@ void Camera::releaseRecordingFrameHandle(native_handle_t* handle)
 
 void Camera::releaseRecordingFrameHandleBatch(
         const std::vector<native_handle_t*> handles) {
-    ALOGD("releaseRecordingFrameHandleBatch");
+    ALOGV("releaseRecordingFrameHandleBatch");
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return;
     c->releaseRecordingFrameHandleBatch(handles);
@@ -251,7 +251,7 @@ void Camera::releaseRecordingFrameHandleBatch(
 // get preview state
 bool Camera::previewEnabled()
 {
-    ALOGD("previewEnabled");
+    ALOGV("previewEnabled");
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return false;
     return c->previewEnabled();
@@ -260,7 +260,7 @@ bool Camera::previewEnabled()
 // get recording state
 bool Camera::recordingEnabled()
 {
-    ALOGD("recordingEnabled");
+    ALOGV("recordingEnabled");
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return false;
     return c->recordingEnabled();
@@ -268,7 +268,7 @@ bool Camera::recordingEnabled()
 
 status_t Camera::autoFocus()
 {
-    ALOGD("autoFocus");
+    ALOGV("autoFocus");
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return NO_INIT;
     return c->autoFocus();
@@ -276,7 +276,7 @@ status_t Camera::autoFocus()
 
 status_t Camera::cancelAutoFocus()
 {
-    ALOGD("cancelAutoFocus");
+    ALOGV("cancelAutoFocus");
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return NO_INIT;
     return c->cancelAutoFocus();
@@ -285,7 +285,7 @@ status_t Camera::cancelAutoFocus()
 // take a picture
 status_t Camera::takePicture(int msgType)
 {
-    ALOGD("takePicture: 0x%x", msgType);
+    ALOGV("takePicture: 0x%x", msgType);
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return NO_INIT;
     return c->takePicture(msgType);
@@ -294,7 +294,7 @@ status_t Camera::takePicture(int msgType)
 // set preview/capture parameters - key/value pairs
 status_t Camera::setParameters(const String8& params)
 {
-    ALOGD("setParameters");
+    ALOGV("setParameters");
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return NO_INIT;
     return c->setParameters(params);
@@ -303,7 +303,7 @@ status_t Camera::setParameters(const String8& params)
 // get preview/capture parameters - key/value pairs
 String8 Camera::getParameters() const
 {
-    ALOGD("getParameters");
+    ALOGV("getParameters");
     String8 params;
     sp <::android::hardware::ICamera> c = mCamera;
     if (c != 0) params = mCamera->getParameters();
@@ -313,7 +313,7 @@ String8 Camera::getParameters() const
 // send command to camera driver
 status_t Camera::sendCommand(int32_t cmd, int32_t arg1, int32_t arg2)
 {
-    ALOGD("sendCommand");
+    ALOGV("sendCommand");
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return NO_INIT;
     return c->sendCommand(cmd, arg1, arg2);
@@ -321,7 +321,6 @@ status_t Camera::sendCommand(int32_t cmd, int32_t arg1, int32_t arg2)
 
 void Camera::setListener(const sp<CameraListener>& listener)
 {
-    ALOGD("setListener");
     Mutex::Autolock _l(mLock);
     mListener = listener;
 }
@@ -334,7 +333,7 @@ void Camera::setRecordingProxyListener(const sp<ICameraRecordingProxyListener>& 
 
 void Camera::setPreviewCallbackFlags(int flag)
 {
-    ALOGD("setPreviewCallbackFlags");
+    ALOGV("setPreviewCallbackFlags");
     sp <::android::hardware::ICamera> c = mCamera;
     if (c == 0) return;
     mCamera->setPreviewCallbackFlag(flag);
@@ -365,7 +364,6 @@ void Camera::dataCallback(int32_t msgType, const sp<IMemory>& dataPtr,
     }
     if (listener != NULL) {
         listener->postData(msgType, dataPtr, metadata);
-        ALOGD("postData");
     }
 }
 
@@ -393,7 +391,6 @@ void Camera::dataCallbackTimestamp(nsecs_t timestamp, int32_t msgType, const sp<
 
     if (listener != NULL) {
         listener->postDataTimestamp(timestamp, msgType, dataPtr);
-        ALOGD("postDataTimestamp");
     } else {
         ALOGW("No listener was set. Drop a recording frame.");
         releaseRecordingFrame(dataPtr);
@@ -461,13 +458,13 @@ void Camera::recordingFrameHandleCallbackTimestampBatch(
 }
 
 sp<ICameraRecordingProxy> Camera::getRecordingProxy() {
-    ALOGD("getProxy");
+    ALOGV("getProxy");
     return new RecordingProxy(this);
 }
 
 status_t Camera::RecordingProxy::startRecording(const sp<ICameraRecordingProxyListener>& listener)
 {
-    ALOGD("RecordingProxy::startRecording");
+    ALOGV("RecordingProxy::startRecording");
     mCamera->setRecordingProxyListener(listener);
     mCamera->reconnect();
     return mCamera->startRecording();
@@ -475,24 +472,24 @@ status_t Camera::RecordingProxy::startRecording(const sp<ICameraRecordingProxyLi
 
 void Camera::RecordingProxy::stopRecording()
 {
-    ALOGD("RecordingProxy::stopRecording");
+    ALOGV("RecordingProxy::stopRecording");
     mCamera->stopRecording();
 }
 
 void Camera::RecordingProxy::releaseRecordingFrame(const sp<IMemory>& mem)
 {
-    ALOGD("RecordingProxy::releaseRecordingFrame");
+    ALOGV("RecordingProxy::releaseRecordingFrame");
     mCamera->releaseRecordingFrame(mem);
 }
 
 void Camera::RecordingProxy::releaseRecordingFrameHandle(native_handle_t* handle) {
-    ALOGD("RecordingProxy::releaseRecordingFrameHandle");
+    ALOGV("RecordingProxy::releaseRecordingFrameHandle");
     mCamera->releaseRecordingFrameHandle(handle);
 }
 
 void Camera::RecordingProxy::releaseRecordingFrameHandleBatch(
         const std::vector<native_handle_t*>& handles) {
-    ALOGD("RecordingProxy::releaseRecordingFrameHandleBatch");
+    ALOGV("RecordingProxy::releaseRecordingFrameHandleBatch");
     mCamera->releaseRecordingFrameHandleBatch(handles);
 }
 

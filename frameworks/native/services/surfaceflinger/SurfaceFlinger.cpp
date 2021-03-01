@@ -3029,48 +3029,42 @@ void SurfaceFlinger::updateInputFlinger() {
     mInputWindowCommands.clear();
 }
 
+#define MAX_CONTEXT 6
+
 void SurfaceFlinger::updateInputWindowInfo() {
-    std::vector<InputWindowInfo> inputHandles;
-    std::vector<InputWindowInfo> inputHandles1;
-    std::vector<InputWindowInfo> inputHandles2;
+    std::vector<std::vector<InputWindowInfo>> inputHandles(MAX_CONTEXT);
+    int i = 0;
 
     mDrawingState.traverseInReverseZOrder([&](Layer* layer) {
         if (layer->hasInput()) {
             // When calculating the screen bounds we ignore the transparent region since it may
             // result in an unwanted offset.
-            if(layer->getSystemName() ==String8(""))
-                inputHandles.push_back(layer->fillInputInfo());
-            if(layer->getSystemName() ==String8("cell1"))
-                inputHandles1.push_back(layer->fillInputInfo());
-            if(layer->getSystemName() ==String8("cell2"))
-                inputHandles2.push_back(layer->fillInputInfo());
+            if(layer->getSystemName() ==String8("")){
+                inputHandles[0].push_back(layer->fillInputInfo());
+            }else{
+                sscanf(layer->systemName(), "cell%d",&i);
+                if(i > 0 && i < MAX_CONTEXT){
+                    inputHandles[i].push_back(layer->fillInputInfo());
+                }
+            }
         }
     });
 
-    mInputFlinger->setInputWindows(inputHandles,
-                                   mInputWindowCommands.syncInputWindows ? mSetInputWindowsListener
-                                                                         : nullptr);
-
+    for(i = 0; i < MAX_CONTEXT; i++)
     {
-        const sp<IServiceManager> sm = OtherServiceManager(1);
-        if (sm != nullptr) {
-            sp<IInputFlinger>  mInputFlinger1 = interface_cast<IInputFlinger>(sm->getService( String16("inputflinger")));
-            if (mInputFlinger1 != nullptr) {
-                    mInputFlinger1->setInputWindows(inputHandles1,
-                                   mInputWindowCommands.syncInputWindows ? mSetInputWindowsListener
-                                                                         : nullptr);
-            }
-        }
-    }
-
-    {
-        const sp<IServiceManager> sm = OtherServiceManager(2);
-        if (sm != nullptr) {
-            sp<IInputFlinger>  mInputFlinger2 = interface_cast<IInputFlinger>(sm->getService( String16("inputflinger")));
-            if (mInputFlinger2 != nullptr) {
-                    mInputFlinger2->setInputWindows(inputHandles2,
-                                   mInputWindowCommands.syncInputWindows ? mSetInputWindowsListener
-                                                                         : nullptr);
+        if( i == 0){
+            mInputFlinger->setInputWindows(inputHandles[0],
+                                mInputWindowCommands.syncInputWindows ? mSetInputWindowsListener
+                                                                        : nullptr);
+        }else{
+            const sp<IServiceManager> sm = OtherServiceManager(i);
+            if (sm != nullptr) {
+                sp<IInputFlinger>  mInputFlinger1 = interface_cast<IInputFlinger>(sm->getService( String16("inputflinger")));
+                if (mInputFlinger1 != nullptr) {
+                    mInputFlinger1->setInputWindows(inputHandles[i],
+                                mInputWindowCommands.syncInputWindows ? mSetInputWindowsListener
+                                                                        : nullptr);
+                }
             }
         }
     }

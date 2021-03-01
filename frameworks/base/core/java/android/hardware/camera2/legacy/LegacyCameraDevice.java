@@ -61,7 +61,7 @@ import static com.android.internal.util.Preconditions.*;
 public class LegacyCameraDevice implements AutoCloseable {
     private final String TAG;
 
-    private static final boolean DEBUG = true;
+    private static final boolean DEBUG = false;
     private final int mCameraId;
     private final CameraCharacteristics mStaticCharacteristics;
     private final ICameraDeviceCallbacks mDeviceCallbacks;

@@ -48,8 +48,6 @@ class CallbackProcessor:
 
     // Set to NULL to disable the direct-to-app callback window
     status_t setCallbackWindow(const sp<Surface>& callbackWindow);
-    status_t startKUAIBO(const Parameters &params);
-    status_t stopKUAIBO();
     status_t updateStream(const Parameters &params);
     status_t deleteStream();
     int getStreamId() const;

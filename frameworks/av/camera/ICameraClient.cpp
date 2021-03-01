@@ -46,7 +46,7 @@ public:
     // generic callback from camera service to app
     void notifyCallback(int32_t msgType, int32_t ext1, int32_t ext2)
     {
-        ALOGD("notifyCallback");
+        ALOGV("notifyCallback");
         Parcel data, reply;
         data.writeInterfaceToken(ICameraClient::getInterfaceDescriptor());
         data.writeInt32(msgType);
@@ -59,7 +59,7 @@ public:
     void dataCallback(int32_t msgType, const sp<IMemory>& imageData,
                       camera_frame_metadata_t *metadata)
     {
-        ALOGD("dataCallback");
+        ALOGV("dataCallback");
         Parcel data, reply;
         data.writeInterfaceToken(ICameraClient::getInterfaceDescriptor());
         data.writeInt32(msgType);
@@ -74,7 +74,7 @@ public:
     // generic data callback from camera service to app with image data
     void dataCallbackTimestamp(nsecs_t timestamp, int32_t msgType, const sp<IMemory>& imageData)
     {
-        ALOGD("dataCallback");
+        ALOGV("dataCallback");
         Parcel data, reply;
         data.writeInterfaceToken(ICameraClient::getInterfaceDescriptor());
         data.writeInt64(timestamp);
@@ -84,7 +84,7 @@ public:
     }
 
     void recordingFrameHandleCallbackTimestamp(nsecs_t timestamp, native_handle_t* handle) {
-        ALOGD("recordingFrameHandleCallbackTimestamp");
+        ALOGV("recordingFrameHandleCallbackTimestamp");
         Parcel data, reply;
         data.writeInterfaceToken(ICameraClient::getInterfaceDescriptor());
         data.writeInt64(timestamp);
@@ -96,7 +96,7 @@ public:
     void recordingFrameHandleCallbackTimestampBatch(
             const std::vector<nsecs_t>& timestamps,
             const std::vector<native_handle_t*>& handles) {
-        ALOGD("recordingFrameHandleCallbackTimestampBatch");
+        ALOGV("recordingFrameHandleCallbackTimestampBatch");
         Parcel data, reply;
         data.writeInterfaceToken(ICameraClient::getInterfaceDescriptor());
         uint32_t n = timestamps.size();
@@ -126,7 +126,7 @@ status_t BnCameraClient::onTransact(
 {
     switch(code) {
         case NOTIFY_CALLBACK: {
-            ALOGD("NOTIFY_CALLBACK");
+            ALOGV("NOTIFY_CALLBACK");
             CHECK_INTERFACE(ICameraClient, data, reply);
             int32_t msgType = data.readInt32();
             int32_t ext1 = data.readInt32();
@@ -135,7 +135,7 @@ status_t BnCameraClient::onTransact(
             return NO_ERROR;
         } break;
         case DATA_CALLBACK: {
-            ALOGD("DATA_CALLBACK");
+            ALOGV("DATA_CALLBACK");
             CHECK_INTERFACE(ICameraClient, data, reply);
             int32_t msgType = data.readInt32();
             sp<IMemory> imageData = interface_cast<IMemory>(data.readStrongBinder());
@@ -151,7 +151,7 @@ status_t BnCameraClient::onTransact(
             return NO_ERROR;
         } break;
         case DATA_CALLBACK_TIMESTAMP: {
-            ALOGD("DATA_CALLBACK_TIMESTAMP");
+            ALOGV("DATA_CALLBACK_TIMESTAMP");
             CHECK_INTERFACE(ICameraClient, data, reply);
             nsecs_t timestamp = data.readInt64();
             int32_t msgType = data.readInt32();
@@ -160,7 +160,7 @@ status_t BnCameraClient::onTransact(
             return NO_ERROR;
         } break;
         case RECORDING_FRAME_HANDLE_CALLBACK_TIMESTAMP: {
-            ALOGD("RECORDING_FRAME_HANDLE_CALLBACK_TIMESTAMP");
+            ALOGV("RECORDING_FRAME_HANDLE_CALLBACK_TIMESTAMP");
             CHECK_INTERFACE(ICameraClient, data, reply);
             nsecs_t timestamp;
             status_t res = data.readInt64(&timestamp);
@@ -179,7 +179,7 @@ status_t BnCameraClient::onTransact(
             return NO_ERROR;
         } break;
         case RECORDING_FRAME_HANDLE_CALLBACK_TIMESTAMP_BATCH: {
-            ALOGD("RECORDING_FRAME_HANDLE_CALLBACK_TIMESTAMP_BATCH");
+            ALOGV("RECORDING_FRAME_HANDLE_CALLBACK_TIMESTAMP_BATCH");
             CHECK_INTERFACE(ICameraClient, data, reply);
             uint32_t n = 0;
             status_t res = data.readUint32(&n);

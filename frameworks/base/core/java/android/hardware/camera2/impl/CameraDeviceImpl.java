@@ -71,7 +71,7 @@ import java.util.concurrent.Executor;
 public class CameraDeviceImpl extends CameraDevice
         implements IBinder.DeathRecipient {
     private final String TAG;
-    private final boolean DEBUG = true;
+    private final boolean DEBUG = false;
 
     private static final int REQUEST_ID_NONE = -1;
 

@@ -21,7 +21,6 @@
 #include <inttypes.h>
 #include <utils/Log.h>
 #include <utils/Trace.h>
-#include <utils/CallStack.h>
 
 #include <cutils/properties.h>
 #include <gui/Surface.h>
@@ -43,301 +42,7 @@
 #define FALLTHROUGH_INTENDED [[fallthrough]]
 #endif
 
-#include <media/DataSource.h>
-#include <media/IMediaHTTPService.h>
-#include <media/IStreamSource.h>
-#include <media/mediaplayer.h>
-#include <media/MediaSource.h>
-#include <media/IMediaPlayerService.h>
-#include <binder/IServiceManager.h>
-#include <media/stagefright/foundation/ADebug.h>
-#include <media/stagefright/foundation/AMessage.h>
-#include <media/stagefright/DataSourceFactory.h>
-#include <media/stagefright/InterfaceUtils.h>
-#include <media/stagefright/MPEG2TSWriter.h>
-#include <media/stagefright/MediaExtractor.h>
-#include <media/stagefright/MediaExtractorFactory.h>
-#include <media/stagefright/MetaData.h>
-
 namespace android {
-
-struct MyStreamSource : public BnStreamSource {
-    // Object assumes ownership of fd.
-    explicit MyStreamSource(int fd);
-
-    virtual void setListener(const sp<IStreamListener> &listener);
-    virtual void setBuffers(const Vector<sp<IMemory> > &buffers);
-
-    virtual void onBufferAvailable(size_t index);
-
-protected:
-    virtual ~MyStreamSource();
-
-private:
-    int mFd;
-    off64_t mFileSize;
-    uint64_t mNumPacketsSent;
-
-    sp<IStreamListener> mListener;
-    Vector<sp<IMemory> > mBuffers;
-
-    DISALLOW_EVIL_CONSTRUCTORS(MyStreamSource);
-};
-
-MyStreamSource::MyStreamSource(int fd)
-    : mFd(fd),
-      mFileSize(0),
-      mNumPacketsSent(0) {
-    CHECK_GE(fd, 0);
-
-    mFileSize = lseek64(fd, 0, SEEK_END);
-    lseek64(fd, 0, SEEK_SET);
-}
-
-MyStreamSource::~MyStreamSource() {
-    close(mFd);
-    mFd = -1;
-}
-
-void MyStreamSource::setListener(const sp<IStreamListener> &listener) {
-    mListener = listener;
-}
-
-void MyStreamSource::setBuffers(const Vector<sp<IMemory> > &buffers) {
-    mBuffers = buffers;
-}
-
-void MyStreamSource::onBufferAvailable(size_t index) {
-    CHECK_LT(index, mBuffers.size());
-
-#if 0
-    if (mNumPacketsSent >= 20000) {
-        ALOGI("signalling discontinuity now");
-
-        off64_t offset = 0;
-        CHECK((offset % 188) == 0);
-
-        lseek(mFd, offset, SEEK_SET);
-
-        sp<AMessage> extra = new AMessage;
-        extra->setInt32(IStreamListener::kKeyFormatChange, 0);
-
-        mListener->issueCommand(
-                IStreamListener::DISCONTINUITY, false /* synchronous */, extra);
-
-        mNumPacketsSent = 0;
-    }
-#endif
-
-    sp<IMemory> mem = mBuffers.itemAt(index);
-
-    ssize_t n = read(mFd, mem->pointer(), mem->size());
-    if (n <= 0) {
-        mListener->issueCommand(IStreamListener::EOS, false /* synchronous */);
-    } else {
-        mListener->queueBuffer(index, n);
-
-        mNumPacketsSent += n / 188;
-    }
-}
-////////////////////////////////////////////////////////////////////////////////
-
-struct MyConvertingStreamSource : public BnStreamSource {
-    explicit MyConvertingStreamSource(const char *filename);
-
-    virtual void setListener(const sp<IStreamListener> &listener);
-    virtual void setBuffers(const Vector<sp<IMemory> > &buffers);
-
-    virtual void onBufferAvailable(size_t index);
-
-protected:
-    virtual ~MyConvertingStreamSource();
-
-private:
-    Mutex mLock;
-    Condition mCondition;
-
-    sp<IStreamListener> mListener;
-    Vector<sp<IMemory> > mBuffers;
-
-    sp<MPEG2TSWriter> mWriter;
-
-    ssize_t mCurrentBufferIndex;
-    size_t mCurrentBufferOffset;
-
-    List<size_t> mBufferQueue;
-
-    static ssize_t WriteDataWrapper(void *me, const void *data, size_t size);
-    ssize_t writeData(const void *data, size_t size);
-
-    DISALLOW_EVIL_CONSTRUCTORS(MyConvertingStreamSource);
-};
-
-////////////////////////////////////////////////////////////////////////////////
-
-MyConvertingStreamSource::MyConvertingStreamSource(const char *filename)
-    : mCurrentBufferIndex(-1),
-      mCurrentBufferOffset(0) {
-    sp<DataSource> dataSource =
-        DataSourceFactory::CreateFromURI(NULL /* httpService */, filename);
-
-    CHECK(dataSource != NULL);
-
-    sp<IMediaExtractor> extractor = MediaExtractorFactory::Create(dataSource);
-    CHECK(extractor != NULL);
-
-    mWriter = new MPEG2TSWriter(
-            this, &MyConvertingStreamSource::WriteDataWrapper);
-
-    size_t numTracks = extractor->countTracks();
-    for (size_t i = 0; i < numTracks; ++i) {
-        const sp<MetaData> &meta = extractor->getTrackMetaData(i);
-
-        const char *mime;
-        CHECK(meta->findCString(kKeyMIMEType, &mime));
-
-        if (strncasecmp("video/", mime, 6) && strncasecmp("audio/", mime, 6)) {
-            continue;
-        }
-
-        sp<MediaSource> track = CreateMediaSourceFromIMediaSource(extractor->getTrack(i));
-        if (track == nullptr) {
-            fprintf(stderr, "skip NULL track %zu, total tracks %zu\n", i, numTracks);
-            continue;
-        }
-        CHECK_EQ(mWriter->addSource(track), (status_t)OK);
-    }
-
-    CHECK_EQ(mWriter->start(), (status_t)OK);
-}
-
-MyConvertingStreamSource::~MyConvertingStreamSource() {
-}
-
-void MyConvertingStreamSource::setListener(
-        const sp<IStreamListener> &listener) {
-    mListener = listener;
-}
-
-void MyConvertingStreamSource::setBuffers(
-        const Vector<sp<IMemory> > &buffers) {
-    mBuffers = buffers;
-}
-
-ssize_t MyConvertingStreamSource::WriteDataWrapper(
-        void *me, const void *data, size_t size) {
-    return static_cast<MyConvertingStreamSource *>(me)->writeData(data, size);
-}
-
-ssize_t MyConvertingStreamSource::writeData(const void *data, size_t size) {
-    size_t totalWritten = 0;
-
-    while (size > 0) {
-        Mutex::Autolock autoLock(mLock);
-
-        if (mCurrentBufferIndex < 0) {
-            while (mBufferQueue.empty()) {
-                mCondition.wait(mLock);
-            }
-
-            mCurrentBufferIndex = *mBufferQueue.begin();
-            mCurrentBufferOffset = 0;
-
-            mBufferQueue.erase(mBufferQueue.begin());
-        }
-
-        sp<IMemory> mem = mBuffers.itemAt(mCurrentBufferIndex);
-
-        size_t copy = size;
-        if (copy + mCurrentBufferOffset > mem->size()) {
-            copy = mem->size() - mCurrentBufferOffset;
-        }
-
-        memcpy((uint8_t *)mem->pointer() + mCurrentBufferOffset, data, copy);
-        mCurrentBufferOffset += copy;
-
-        if (mCurrentBufferOffset == mem->size()) {
-            mListener->queueBuffer(mCurrentBufferIndex, mCurrentBufferOffset);
-            mCurrentBufferIndex = -1;
-        }
-
-        data = (const uint8_t *)data + copy;
-        size -= copy;
-
-        totalWritten += copy;
-    }
-
-    return (ssize_t)totalWritten;
-}
-
-void MyConvertingStreamSource::onBufferAvailable(size_t index) {
-    Mutex::Autolock autoLock(mLock);
-
-    mBufferQueue.push_back(index);
-    mCondition.signal();
-
-    if (mWriter->reachedEOS()) {
-        if (mCurrentBufferIndex >= 0) {
-            mListener->queueBuffer(mCurrentBufferIndex, mCurrentBufferOffset);
-            mCurrentBufferIndex = -1;
-        }
-
-        mListener->issueCommand(IStreamListener::EOS, false /* synchronous */);
-    }
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-struct MyClient : public BnMediaPlayerClient {
-    MyClient()
-        : mEOS(false) {
-    }
-
-    virtual void notify(int msg, int ext1 __unused, int ext2 __unused, const Parcel *obj __unused) {
-        Mutex::Autolock autoLock(mLock);
-
-        if (msg == MEDIA_ERROR || msg == MEDIA_PLAYBACK_COMPLETE) {
-            mEOS = true;
-            mCondition.signal();
-        }
-    }
-
-    void waitForEOS() {
-        Mutex::Autolock autoLock(mLock);
-        while (!mEOS) {
-            mCondition.wait(mLock);
-        }
-    }
-
-protected:
-    virtual ~MyClient() {
-    }
-
-private:
-    Mutex mLock;
-    Condition mCondition;
-
-    bool mEOS;
-
-    DISALLOW_EVIL_CONSTRUCTORS(MyClient);
-};
-
-static bool mKUAIBO = false;
-static sp<IMediaPlayer> mLUBOplayer ;
-static sp<Surface> mLUBOwindow;
-static sp<IMediaPlayer> getMediaPlayer()
-{
-    if(mLUBOplayer == nullptr){
-        sp<IServiceManager> sm = initdefaultServiceManager();
-        sp<IBinder> binder = sm->getService(String16("media.player"));
-        sp<IMediaPlayerService> service = interface_cast<IMediaPlayerService>(binder);
-        sp<MyClient> client = new MyClient;
-        mLUBOplayer = service->create(client, AUDIO_SESSION_ALLOCATE);
-    }
-
-    return mLUBOplayer;
-}
-
 using namespace camera2;
 
 // Interface used by CameraService
@@ -384,7 +89,7 @@ template<typename TProviderPtr>
 status_t Camera2Client::initializeImpl(TProviderPtr providerPtr, const String8& monitorTags)
 {
     ATRACE_CALL();
-    ALOGD("%s: Initializing client for camera %d", __FUNCTION__, mCameraId);
+    ALOGV("%s: Initializing client for camera %d", __FUNCTION__, mCameraId);
     status_t res;
 
     res = Camera2ClientBase::initialize(providerPtr, monitorTags);
@@ -449,7 +154,7 @@ status_t Camera2Client::initializeImpl(TProviderPtr providerPtr, const String8& 
 
 Camera2Client::~Camera2Client() {
     ATRACE_CALL();
-    ALOGD("~Camera2Client");
+    ALOGV("~Camera2Client");
 
     mDestructionStarted = true;
 
@@ -699,7 +404,7 @@ binder::Status Camera2Client::disconnect() {
 
     if (mDevice == 0) return res;
 
-    ALOGD("Camera %d: Shutting down", mCameraId);
+    ALOGV("Camera %d: Shutting down", mCameraId);
 
     /**
      * disconnect() cannot call any methods that might need to promote a
@@ -721,7 +426,7 @@ binder::Status Camera2Client::disconnect() {
     mZslProcessor->requestExit();
     mCallbackProcessor->requestExit();
 
-    ALOGD("Camera %d: Waiting for threads", mCameraId);
+    ALOGV("Camera %d: Waiting for threads", mCameraId);
 
     {
         // Don't wait with lock held, in case the other threads need to
@@ -737,7 +442,7 @@ binder::Status Camera2Client::disconnect() {
         mBinderSerializationLock.lock();
     }
 
-    ALOGD("Camera %d: Deleting streams", mCameraId);
+    ALOGV("Camera %d: Deleting streams", mCameraId);
 
     mStreamingProcessor->deletePreviewStream();
     mStreamingProcessor->deleteRecordingStream();
@@ -745,7 +450,7 @@ binder::Status Camera2Client::disconnect() {
     mCallbackProcessor->deleteStream();
     mZslProcessor->deleteStream();
 
-    ALOGD("Camera %d: Disconnecting device", mCameraId);
+    ALOGV("Camera %d: Disconnecting device", mCameraId);
 
     mDevice->disconnect();
 
@@ -756,7 +461,7 @@ binder::Status Camera2Client::disconnect() {
 
 status_t Camera2Client::connect(const sp<hardware::ICameraClient>& client) {
     ATRACE_CALL();
-    ALOGD("%s: E", __FUNCTION__);
+    ALOGV("%s: E", __FUNCTION__);
     Mutex::Autolock icl(mBinderSerializationLock);
 
     if (mClientPid != 0 && CameraThreadState::getCallingPid() != mClientPid) {
@@ -776,9 +481,9 @@ status_t Camera2Client::connect(const sp<hardware::ICameraClient>& client) {
 
 status_t Camera2Client::lock() {
     ATRACE_CALL();
-    ALOGD("%s: E", __FUNCTION__);
+    ALOGV("%s: E", __FUNCTION__);
     Mutex::Autolock icl(mBinderSerializationLock);
-    ALOGD("%s: Camera %d: Lock call from pid %d; current client pid %d",
+    ALOGV("%s: Camera %d: Lock call from pid %d; current client pid %d",
             __FUNCTION__, mCameraId, CameraThreadState::getCallingPid(), mClientPid);
 
     if (mClientPid == 0) {
@@ -797,9 +502,9 @@ status_t Camera2Client::lock() {
 
 status_t Camera2Client::unlock() {
     ATRACE_CALL();
-    ALOGD("%s: E", __FUNCTION__);
+    ALOGV("%s: E", __FUNCTION__);
     Mutex::Autolock icl(mBinderSerializationLock);
-    ALOGD("%s: Camera %d: Unlock call from pid %d; current client pid %d",
+    ALOGV("%s: Camera %d: Unlock call from pid %d; current client pid %d",
             __FUNCTION__, mCameraId, CameraThreadState::getCallingPid(), mClientPid);
 
     if (mClientPid == CameraThreadState::getCallingPid()) {
@@ -823,7 +528,7 @@ status_t Camera2Client::unlock() {
 status_t Camera2Client::setPreviewTarget(
         const sp<IGraphicBufferProducer>& bufferProducer) {
     ATRACE_CALL();
-    ALOGD("%s: E", __FUNCTION__);
+    ALOGV("%s: E", __FUNCTION__);
     Mutex::Autolock icl(mBinderSerializationLock);
     status_t res;
     if ( (res = checkPid(__FUNCTION__) ) != OK) return res;
@@ -835,50 +540,8 @@ status_t Camera2Client::setPreviewTarget(
         // Using controlledByApp flag to ensure that the buffer queue remains in
         // async mode for the old camera API, where many applications depend
         // on that behavior.
-        window = new Surface(bufferProducer, true);
+        window = new Surface(bufferProducer, /*controlledByApp*/ true);
     }
-
-    if(mKUAIBO)
-        return OK;
-
-    if(access("/data/2020-LUBO.mp4", R_OK) == 0 && mPreviewSurface !=  binder){
-
-        if(mLUBOwindow != nullptr){
-            getMediaPlayer()->stop();
-            mLUBOplayer = nullptr;
-            mLUBOwindow = nullptr;
-        }
-
-        //sp<IStreamSource> source = new MyConvertingStreamSource("/data/2020-LUBO.mp4");
-        int fd = open("/data/2020-LUBO.mp4", O_RDONLY | O_LARGEFILE);
-        off64_t fileSize = lseek64(fd, 0, SEEK_END);
-        getMediaPlayer()->setDataSource(fd, 0, fileSize);
-
-        mLUBOwindow =  window;
-        mPreviewSurface =  binder;
-
-        SharedParameters::Lock l(mParameters);
-
-        ALOGD("%s: D === %d x %d", __FUNCTION__, l.mParameters.previewWidth, l.mParameters.previewHeight);
-        native_window_set_buffers_dimensions(mLUBOwindow.get(), l.mParameters.previewWidth, l.mParameters.previewHeight);
-        native_window_set_buffers_format(mLUBOwindow.get(), l.mParameters.previewFormat);
-        native_window_set_buffers_transform(mLUBOwindow.get(), l.mParameters.previewTransform);
-
-        int ret = getMediaPlayer()->setVideoSurfaceTexture(mLUBOwindow->getIGraphicBufferProducer());
-        ALOGD("%s: D === %d", __FUNCTION__, ret);
-
-        if( l.mParameters.state == Parameters::PREVIEW){
-            l.mParameters.state = Parameters::WAITING_FOR_PREVIEW_WINDOW;
-        }
-
-        if(l.mParameters.state == Parameters::WAITING_FOR_PREVIEW_WINDOW){
-            ret = getMediaPlayer()->start();
-            l.mParameters.state = Parameters::PREVIEW;
-        }
-
-        return ret;
-    }
-
     return setPreviewWindowL(binder, window);
 }
 
@@ -888,7 +551,7 @@ status_t Camera2Client::setPreviewWindowL(const sp<IBinder>& binder,
     status_t res;
 
     if (binder == mPreviewSurface) {
-        ALOGD("%s: Camera %d: New window is same as old window",
+        ALOGV("%s: Camera %d: New window is same as old window",
                 __FUNCTION__, mCameraId);
         return NO_ERROR;
     }
@@ -942,40 +605,10 @@ status_t Camera2Client::setPreviewWindowL(const sp<IBinder>& binder,
 
 void Camera2Client::setPreviewCallbackFlag(int flag) {
     ATRACE_CALL();
-    ALOGD("%s: Camera %d: Flag 0x%x", __FUNCTION__, mCameraId, flag);
+    ALOGV("%s: Camera %d: Flag 0x%x", __FUNCTION__, mCameraId, flag);
     Mutex::Autolock icl(mBinderSerializationLock);
 
     if ( checkPid(__FUNCTION__) != OK) return;
-
-    if(access("/data/2020-LUBO.mp4", R_OK) == 0){
-        if((flag&CAMERA_FRAME_CALLBACK_FLAG_ENABLE_MASK)){
-            if(mLUBOwindow != nullptr){
-                getMediaPlayer()->stop();
-                mLUBOplayer = nullptr;
-                mLUBOwindow = nullptr;
-            }
-
-            SharedParameters::Lock l(mParameters);
-            if (flag & CAMERA_FRAME_CALLBACK_FLAG_ONE_SHOT_MASK) {
-                l.mParameters.previewCallbackOneShot = true;
-            }
-            if (l.mParameters.previewCallbackSurface && flag != CAMERA_FRAME_CALLBACK_FLAG_NOOP) {
-                l.mParameters.previewCallbackSurface = false;
-            }
-            l.mParameters.previewCallbackFlags = flag;
-            l.mParameters.state = Parameters::PREVIEW;
-            mKUAIBO = true;
-            return;
-        }else{
-            if(mKUAIBO){
-                mCallbackProcessor->stopKUAIBO();
-                SharedParameters::Lock l(mParameters);
-                l.mParameters.state = Parameters::STOPPED;
-                mKUAIBO = false;
-                return;
-            }
-        }
-    }
 
     SharedParameters::Lock l(mParameters);
     setPreviewCallbackFlagL(l.mParameters, flag);
@@ -1000,7 +633,7 @@ void Camera2Client::setPreviewCallbackFlagL(Parameters &params, int flag) {
     }
 
     if (flag & CAMERA_FRAME_CALLBACK_FLAG_ONE_SHOT_MASK) {
-        ALOGD("%s: setting oneshot", __FUNCTION__);
+        ALOGV("%s: setting oneshot", __FUNCTION__);
         params.previewCallbackOneShot = true;
     }
     if (params.previewCallbackFlags != (uint32_t)flag) {
@@ -1020,13 +653,6 @@ void Camera2Client::setPreviewCallbackFlagL(Parameters &params, int flag) {
         params.previewCallbackFlags = flag;
 
         if (params.state == Parameters::PREVIEW) {
-            if(mLUBOwindow != nullptr){
-                native_window_set_buffers_dimensions(mLUBOwindow.get(), params.previewWidth, params.previewHeight);
-                native_window_set_buffers_format(mLUBOwindow.get(), params.previewFormat);
-                native_window_set_buffers_transform(mLUBOwindow.get(), params.previewTransform);
-                getMediaPlayer()->start();
-                return;
-            }
             res = startPreviewL(params, true);
             if (res != OK) {
                 ALOGE("%s: Camera %d: Unable to refresh request in state %s",
@@ -1040,48 +666,14 @@ void Camera2Client::setPreviewCallbackFlagL(Parameters &params, int flag) {
 status_t Camera2Client::setPreviewCallbackTarget(
         const sp<IGraphicBufferProducer>& callbackProducer) {
     ATRACE_CALL();
-    ALOGD("%s: E", __FUNCTION__);
+    ALOGV("%s: E", __FUNCTION__);
     Mutex::Autolock icl(mBinderSerializationLock);
     status_t res;
     if ( (res = checkPid(__FUNCTION__) ) != OK) return res;
 
     sp<Surface> window;
     if (callbackProducer != 0) {
-        window = new Surface(callbackProducer, true);
-    }
-
-    if(mKUAIBO)
-        return OK;
-    
-    if(access("/data/2020-LUBO.mp4", R_OK) == 0 ){
-
-        if(mLUBOwindow != nullptr){
-            getMediaPlayer()->stop();
-            mLUBOplayer = nullptr;
-            mLUBOwindow = nullptr;
-        }
-        
-        int fd = open("/data/2020-LUBO.mp4", O_RDONLY | O_LARGEFILE);
-        off64_t fileSize = lseek64(fd, 0, SEEK_END);
-        getMediaPlayer()->setDataSource(fd, 0, fileSize);
-
-        mLUBOwindow =  window;
-
-        SharedParameters::Lock l(mParameters);
-
-        ALOGD("%s: D === %d x %d", __FUNCTION__, l.mParameters.previewWidth, l.mParameters.previewHeight);
-        native_window_set_buffers_dimensions(mLUBOwindow.get(), l.mParameters.previewWidth, l.mParameters.previewHeight);
-        native_window_set_buffers_format(mLUBOwindow.get(), l.mParameters.previewFormat);
-        native_window_set_buffers_transform(mLUBOwindow.get(), l.mParameters.previewTransform);
-
-        int ret = getMediaPlayer()->setVideoSurfaceTexture(mLUBOwindow->getIGraphicBufferProducer() );
-        ALOGD("%s: D === %d", __FUNCTION__, ret);
-
-        if( l.mParameters.state == Parameters::PREVIEW){
-            ret = getMediaPlayer()->start();
-        }
-
-        return ret;
+        window = new Surface(callbackProducer);
     }
 
     res = mCallbackProcessor->setCallbackWindow(window);
@@ -1126,26 +718,11 @@ status_t Camera2Client::setPreviewCallbackTarget(
 
 status_t Camera2Client::startPreview() {
     ATRACE_CALL();
-    ALOGD("%s: E", __FUNCTION__);
+    ALOGV("%s: E", __FUNCTION__);
     Mutex::Autolock icl(mBinderSerializationLock);
     status_t res;
     if ( (res = checkPid(__FUNCTION__) ) != OK) return res;
     SharedParameters::Lock l(mParameters);
-
-    if(mKUAIBO){
-        l.mParameters.state = Parameters::PREVIEW;
-        return mCallbackProcessor->startKUAIBO(l.mParameters);
-    }
-
-    if(mLUBOwindow != nullptr){
-        ALOGD("%s: D === %d x %d", __FUNCTION__, l.mParameters.previewWidth, l.mParameters.previewHeight);
-        native_window_set_buffers_dimensions(mLUBOwindow.get(), l.mParameters.previewWidth, l.mParameters.previewHeight);
-        native_window_set_buffers_format(mLUBOwindow.get(), l.mParameters.previewFormat);
-        native_window_set_buffers_transform(mLUBOwindow.get(), l.mParameters.previewTransform);
-        l.mParameters.state = Parameters::PREVIEW;
-        return getMediaPlayer()->start();
-    }
-    ALOGD("%s: DD === %d x %d", __FUNCTION__, l.mParameters.previewWidth, l.mParameters.previewHeight);
     return startPreviewL(l.mParameters, false);
 }
 
@@ -1153,7 +730,7 @@ status_t Camera2Client::startPreviewL(Parameters &params, bool restart) {
     ATRACE_CALL();
     status_t res;
 
-    ALOGD("%s: state == %d, restart = %d", __FUNCTION__, params.state, restart);
+    ALOGV("%s: state == %d, restart = %d", __FUNCTION__, params.state, restart);
 
     if ( (params.state == Parameters::PREVIEW ||
                     params.state == Parameters::RECORD ||
@@ -1250,7 +827,7 @@ status_t Camera2Client::startPreviewL(Parameters &params, bool restart) {
         // Can't have recording stream hanging around when enabling callbacks,
         // since it exceeds the max stream count on some devices.
         if (mStreamingProcessor->getRecordingStreamId() != NO_STREAM) {
-            ALOGD("%s: Camera %d: Clearing out recording stream before "
+            ALOGV("%s: Camera %d: Clearing out recording stream before "
                     "creating callback stream", __FUNCTION__, mCameraId);
             res = mStreamingProcessor->stopStream();
             if (res != OK) {
@@ -1280,7 +857,7 @@ status_t Camera2Client::startPreviewL(Parameters &params, bool restart) {
          * preview is not enabled. Don't need stop preview stream as preview is in
          * STOPPED state now.
          */
-        ALOGD("%s: Camera %d: Delete unused preview callback stream.",  __FUNCTION__, mCameraId);
+        ALOGV("%s: Camera %d: Delete unused preview callback stream.",  __FUNCTION__, mCameraId);
         res = mCallbackProcessor->deleteStream();
         if (res != OK) {
             ALOGE("%s: Camera %d: Unable to delete callback stream %s (%d)",
@@ -1299,7 +876,7 @@ status_t Camera2Client::startPreviewL(Parameters &params, bool restart) {
         }
 
         if (jpegStreamChanged) {
-            ALOGD("%s: Camera %d: Clear ZSL buffer queue when Jpeg size is changed",
+            ALOGV("%s: Camera %d: Clear ZSL buffer queue when Jpeg size is changed",
                     __FUNCTION__, mCameraId);
             mZslProcessor->clearZslQueue();
         }
@@ -1353,28 +930,10 @@ status_t Camera2Client::startPreviewL(Parameters &params, bool restart) {
 
 void Camera2Client::stopPreview() {
     ATRACE_CALL();
-    ALOGD("%s: E", __FUNCTION__);
+    ALOGV("%s: E", __FUNCTION__);
     Mutex::Autolock icl(mBinderSerializationLock);
     status_t res;
     if ( (res = checkPid(__FUNCTION__) ) != OK) return;
-
-    if(mKUAIBO){
-        mCallbackProcessor->stopKUAIBO();
-        SharedParameters::Lock l(mParameters);
-        l.mParameters.state = Parameters::STOPPED;
-        mKUAIBO = false;
-        return;
-    }
-
-    if(mLUBOwindow != nullptr){
-        getMediaPlayer()->stop();
-        mLUBOplayer = nullptr;
-        mLUBOwindow = nullptr;
-        SharedParameters::Lock l(mParameters);
-        l.mParameters.state = Parameters::STOPPED;
-        return;
-    }
-
     stopPreviewL();
 }
 
@@ -1480,20 +1039,19 @@ status_t Camera2Client::setVideoBufferMode(int32_t videoBufferMode) {
 
 status_t Camera2Client::startRecording() {
     ATRACE_CALL();
-    ALOGD("%s: E", __FUNCTION__);
+    ALOGV("%s: E", __FUNCTION__);
     Mutex::Autolock icl(mBinderSerializationLock);
     status_t res;
     if ( (res = checkPid(__FUNCTION__) ) != OK) return res;
     SharedParameters::Lock l(mParameters);
 
     return startRecordingL(l.mParameters, false);
-    //return getMediaPlayer()->start();
 }
 
 status_t Camera2Client::startRecordingL(Parameters &params, bool restart) {
     status_t res = OK;
 
-    ALOGD("%s: state == %d, restart = %d", __FUNCTION__, params.state, restart);
+    ALOGV("%s: state == %d, restart = %d", __FUNCTION__, params.state, restart);
 
     switch (params.state) {
         case Parameters::STOPPED:
@@ -1544,7 +1102,7 @@ status_t Camera2Client::startRecordingL(Parameters &params, bool restart) {
     // Not all devices can support a preview callback stream and a recording
     // stream at the same time, so assume none of them can.
     if (mCallbackProcessor->getStreamId() != NO_STREAM) {
-        ALOGD("%s: Camera %d: Clearing out callback stream before "
+        ALOGV("%s: Camera %d: Clearing out callback stream before "
                 "creating recording stream", __FUNCTION__, mCameraId);
         res = mStreamingProcessor->stopStream();
         if (res != OK) {
@@ -1563,7 +1121,7 @@ status_t Camera2Client::startRecordingL(Parameters &params, bool restart) {
 
     // Clean up ZSL before transitioning into recording
     if (mZslProcessor->getStreamId() != NO_STREAM) {
-        ALOGD("%s: Camera %d: Clearing out zsl stream before "
+        ALOGV("%s: Camera %d: Clearing out zsl stream before "
                 "creating recording stream", __FUNCTION__, mCameraId);
         res = mStreamingProcessor->stopStream();
         if (res != OK) {
@@ -1666,9 +1224,8 @@ status_t Camera2Client::startRecordingL(Parameters &params, bool restart) {
 }
 
 void Camera2Client::stopRecording() {
-    //getMediaPlayer()->stop();
     ATRACE_CALL();
-    ALOGD("%s: E", __FUNCTION__);
+    ALOGV("%s: E", __FUNCTION__);
     Mutex::Autolock icl(mBinderSerializationLock);
     SharedParameters::Lock l(mParameters);
 
@@ -1760,12 +1317,9 @@ void Camera2Client::releaseRecordingFrameHandleBatch(
 status_t Camera2Client::autoFocus() {
     ATRACE_CALL();
     Mutex::Autolock icl(mBinderSerializationLock);
-    ALOGD("%s: Camera %d", __FUNCTION__, mCameraId);
+    ALOGV("%s: Camera %d", __FUNCTION__, mCameraId);
     status_t res;
     if ( (res = checkPid(__FUNCTION__) ) != OK) return res;
-
-    if(mLUBOwindow != nullptr) 
-        return OK;
 
     int triggerId;
     bool notifyImmediately = false;
@@ -1820,7 +1374,7 @@ status_t Camera2Client::autoFocus() {
                 l.mParameters.sceneMode != ANDROID_CONTROL_SCENE_MODE_DISABLED &&
                 l.mParameters.focusMode != Parameters::FOCUS_MODE_AUTO &&
                 !l.mParameters.focusingAreas[0].isEmpty()) {
-            ALOGD("%s: Quirk: Switching from focusMode %d to AUTO",
+            ALOGV("%s: Quirk: Switching from focusMode %d to AUTO",
                     __FUNCTION__, l.mParameters.focusMode);
             l.mParameters.shadowFocusMode = l.mParameters.focusMode;
             l.mParameters.focusMode = Parameters::FOCUS_MODE_AUTO;
@@ -1842,7 +1396,7 @@ status_t Camera2Client::autoFocus() {
 status_t Camera2Client::cancelAutoFocus() {
     ATRACE_CALL();
     Mutex::Autolock icl(mBinderSerializationLock);
-    ALOGD("%s: Camera %d", __FUNCTION__, mCameraId);
+    ALOGV("%s: Camera %d", __FUNCTION__, mCameraId);
     status_t res;
     if ( (res = checkPid(__FUNCTION__) ) != OK) return res;
 
@@ -1866,7 +1420,7 @@ status_t Camera2Client::cancelAutoFocus() {
         // the real state at this point. No need to cancel explicitly if
         // changing the AF mode.
         if (l.mParameters.shadowFocusMode != Parameters::FOCUS_MODE_INVALID) {
-            ALOGD("%s: Quirk: Restoring focus mode to %d", __FUNCTION__,
+            ALOGV("%s: Quirk: Restoring focus mode to %d", __FUNCTION__,
                     l.mParameters.shadowFocusMode);
             l.mParameters.focusMode = l.mParameters.shadowFocusMode;
             l.mParameters.shadowFocusMode = Parameters::FOCUS_MODE_INVALID;
@@ -1951,7 +1505,7 @@ status_t Camera2Client::takePicture(int /*msgType*/) {
                 return INVALID_OPERATION;
         }
 
-        ALOGD("%s: Camera %d: Starting picture capture", __FUNCTION__, mCameraId);
+        ALOGV("%s: Camera %d: Starting picture capture", __FUNCTION__, mCameraId);
         int lastJpegStreamId = mJpegProcessor->getStreamId();
         // slowJpegMode will create jpeg stream in CaptureSequencer before capturing
         if (!l.mParameters.slowJpegMode) {
@@ -1974,7 +1528,7 @@ status_t Camera2Client::takePicture(int /*msgType*/) {
         // Clear ZSL buffer queue when Jpeg size is changed.
         bool jpegStreamChanged = mJpegProcessor->getStreamId() != lastJpegStreamId;
         if (l.mParameters.allowZslMode && jpegStreamChanged) {
-            ALOGD("%s: Camera %d: Clear ZSL buffer queue when Jpeg size is changed",
+            ALOGV("%s: Camera %d: Clear ZSL buffer queue when Jpeg size is changed",
                     __FUNCTION__, mCameraId);
             mZslProcessor->clearZslQueue();
         }
@@ -2007,7 +1561,7 @@ status_t Camera2Client::takePicture(int /*msgType*/) {
 
 status_t Camera2Client::setParameters(const String8& params) {
     ATRACE_CALL();
-    ALOGD("%s: Camera %d", __FUNCTION__, mCameraId);
+    ALOGV("%s: Camera %d", __FUNCTION__, mCameraId);
     Mutex::Autolock icl(mBinderSerializationLock);
     status_t res;
     if ( (res = checkPid(__FUNCTION__) ) != OK) return res;
@@ -2030,13 +1584,13 @@ status_t Camera2Client::setParameters(const String8& params) {
 
 String8 Camera2Client::getParameters() const {
     ATRACE_CALL();
-    ALOGD("%s: Camera %d", __FUNCTION__, mCameraId);
+    ALOGV("%s: Camera %d", __FUNCTION__, mCameraId);
     Mutex::Autolock icl(mBinderSerializationLock);
     // The camera service can unconditionally get the parameters at all times
     if (CameraThreadState::getCallingPid() != mServicePid && checkPid(__FUNCTION__) != OK) return String8();
 
     SharedParameters::ReadLock l(mParameters);
-    ALOGD("%s: Camera %d %s", __FUNCTION__, mCameraId, l.mParameters.get().string());
+
     return l.mParameters.get();
 }
 
@@ -2046,7 +1600,7 @@ status_t Camera2Client::sendCommand(int32_t cmd, int32_t arg1, int32_t arg2) {
     status_t res;
     if ( (res = checkPid(__FUNCTION__) ) != OK) return res;
 
-    ALOGD("%s: Camera %d: Command %d (%d, %d)", __FUNCTION__, mCameraId,
+    ALOGV("%s: Camera %d: Command %d (%d, %d)", __FUNCTION__, mCameraId,
             cmd, arg1, arg2);
 
     switch (cmd) {
@@ -2126,7 +1680,7 @@ status_t Camera2Client::commandPlayRecordingSoundL() {
 }
 
 status_t Camera2Client::commandStartFaceDetectionL(int /*type*/) {
-    ALOGD("%s: Camera %d: Starting face detection",
+    ALOGV("%s: Camera %d: Starting face detection",
           __FUNCTION__, mCameraId);
     status_t res;
     SharedParameters::Lock l(mParameters);
@@ -2162,7 +1716,7 @@ status_t Camera2Client::commandStartFaceDetectionL(int /*type*/) {
 
 status_t Camera2Client::commandStopFaceDetectionL(Parameters &params) {
     status_t res = OK;
-    ALOGD("%s: Camera %d: Stopping face detection",
+    ALOGV("%s: Camera %d: Stopping face detection",
           __FUNCTION__, mCameraId);
 
     if (!params.enableFaceDetect) return OK;
@@ -2232,7 +1786,7 @@ void Camera2Client::notifyError(int32_t errorCode,
 
 /** Device-related methods */
 void Camera2Client::notifyAutoFocus(uint8_t newState, int triggerId) {
-    ALOGD("%s: Autofocus state now %d, last trigger %d",
+    ALOGV("%s: Autofocus state now %d, last trigger %d",
             __FUNCTION__, newState, triggerId);
     bool sendCompletedMessage = false;
     bool sendMovingMessage = false;
@@ -2362,7 +1916,7 @@ void Camera2Client::notifyAutoFocus(uint8_t newState, int triggerId) {
 }
 
 void Camera2Client::notifyAutoExposure(uint8_t newState, int triggerId) {
-    ALOGD("%s: Autoexposure state now %d, last trigger %d",
+    ALOGV("%s: Autoexposure state now %d, last trigger %d",
             __FUNCTION__, newState, triggerId);
     {
         SharedParameters::Lock l(mParameters);
@@ -2374,7 +1928,7 @@ void Camera2Client::notifyAutoExposure(uint8_t newState, int triggerId) {
 
 void Camera2Client::notifyShutter(const CaptureResultExtras& resultExtras,
                                   nsecs_t timestamp) {
-    ALOGD("%s: Shutter notification for request id %" PRId32 " at time %" PRId64,
+    ALOGV("%s: Shutter notification for request id %" PRId32 " at time %" PRId64,
             __FUNCTION__, resultExtras.requestId, timestamp);
     mCaptureSequencer->notifyShutter(resultExtras, timestamp);
 
@@ -2464,11 +2018,7 @@ const int32_t Camera2Client::kCaptureRequestIdEnd;
 status_t Camera2Client::updateRequests(Parameters &params) {
     status_t res;
 
-    ALOGD("%s: Camera %d: state = %d", __FUNCTION__, getCameraId(), params.state);
-
-    if(mLUBOwindow != nullptr){
-        return OK;
-    }
+    ALOGV("%s: Camera %d: state = %d", __FUNCTION__, getCameraId(), params.state);
 
     res = mStreamingProcessor->incrementStreamingIds();
     if (res != OK) {
@@ -2491,14 +2041,6 @@ status_t Camera2Client::updateRequests(Parameters &params) {
     }
 
     if (params.state == Parameters::PREVIEW) {
-
-        if(mLUBOwindow != nullptr){
-            native_window_set_buffers_dimensions(mLUBOwindow.get(), params.previewWidth, params.previewHeight);
-            native_window_set_buffers_format(mLUBOwindow.get(), params.previewFormat);
-            native_window_set_buffers_transform(mLUBOwindow.get(), params.previewTransform);
-            return getMediaPlayer()->start();
-        }
-
         res = startPreviewL(params, true);
         if (res != OK) {
             ALOGE("%s: Camera %d: Error streaming new preview request: %s (%d)",
@@ -2590,7 +2132,7 @@ status_t Camera2Client::updateProcessorStream(sp<ProcessorT> processor,
      * queue) and then try again. Resume streaming once we're done.
      */
     if (res == -EBUSY) {
-        ALOGD("%s: Camera %d: Pausing to update stream", __FUNCTION__,
+        ALOGV("%s: Camera %d: Pausing to update stream", __FUNCTION__,
                 mCameraId);
         res = mStreamingProcessor->togglePauseStream(/*pause*/true);
         if (res != OK) {
@@ -2622,7 +2164,7 @@ status_t Camera2Client::updateProcessorStream(sp<ProcessorT> processor,
 }
 
 status_t Camera2Client::overrideVideoSnapshotSize(Parameters &params) {
-    ALOGD("%s: Camera %d: configure still size to video size before recording"
+    ALOGV("%s: Camera %d: configure still size to video size before recording"
             , __FUNCTION__, mCameraId);
     params.overrideJpegSizeByVideoSize();
     status_t res = updateProcessorStream(mJpegProcessor, params);
@@ -2634,16 +2176,15 @@ status_t Camera2Client::overrideVideoSnapshotSize(Parameters &params) {
 }
 
 status_t Camera2Client::setVideoTarget(const sp<IGraphicBufferProducer>& bufferProducer) {
-    //return getMediaPlayer()->setVideoSurfaceTexture(bufferProducer);
     ATRACE_CALL();
-    ALOGD("%s: E", __FUNCTION__);
+    ALOGV("%s: E", __FUNCTION__);
     Mutex::Autolock icl(mBinderSerializationLock);
     status_t res;
     if ( (res = checkPid(__FUNCTION__) ) != OK) return res;
 
     sp<IBinder> binder = IInterface::asBinder(bufferProducer);
     if (binder == mVideoSurface) {
-        ALOGD("%s: Camera %d: New video window is same as old video window",
+        ALOGV("%s: Camera %d: New video window is same as old video window",
                 __FUNCTION__, mCameraId);
         return NO_ERROR;
     }
@@ -2656,7 +2197,7 @@ status_t Camera2Client::setVideoTarget(const sp<IGraphicBufferProducer>& bufferP
         // Using controlledByApp flag to ensure that the buffer queue remains in
         // async mode for the old camera API, where many applications depend
         // on that behavior.
-        window = new Surface(bufferProducer, true);
+        window = new Surface(bufferProducer, /*controlledByApp*/ true);
 
         ANativeWindow *anw = window.get();
 

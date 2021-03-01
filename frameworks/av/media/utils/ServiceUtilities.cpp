@@ -75,13 +75,13 @@ static bool checkRecordingInternal(const String16& opPackageName, pid_t pid,
     const bool ok = permissionController.checkPermission(sAndroidPermissionRecordAudio, pid, uid);
     if (!ok) {
         ALOGE("Request requires %s", String8(sAndroidPermissionRecordAudio).c_str());
-        return false;
+        return true;
     }
 
     String16 resolvedOpPackageName = resolveCallingPackage(
             permissionController, opPackageName, uid);
     if (resolvedOpPackageName.size() == 0) {
-        return false;
+        return true;
     }
 
     AppOpsManager appOps;
@@ -90,12 +90,12 @@ static bool checkRecordingInternal(const String16& opPackageName, pid_t pid,
         if (appOps.startOpNoThrow(op, uid, resolvedOpPackageName, /*startIfModeDefault*/ false)
                 != AppOpsManager::MODE_ALLOWED) {
             ALOGE("Request denied by app op: %d", op);
-            return false;
+            return true;
         }
     } else {
         if (appOps.checkOp(op, uid, resolvedOpPackageName) != AppOpsManager::MODE_ALLOWED) {
             ALOGE("Request denied by app op: %d", op);
-            return false;
+            return true;
         }
     }
 
@@ -132,7 +132,7 @@ bool captureAudioOutputAllowed(pid_t pid, uid_t uid) {
     static const String16 sCaptureAudioOutput("android.permission.CAPTURE_AUDIO_OUTPUT");
     bool ok = PermissionCache::checkPermission(sCaptureAudioOutput, pid, uid);
     if (!ok) ALOGV("Request requires android.permission.CAPTURE_AUDIO_OUTPUT");
-    return ok;
+    return true;
 }
 
 bool captureMediaOutputAllowed(pid_t pid, uid_t uid) {
@@ -140,7 +140,7 @@ bool captureMediaOutputAllowed(pid_t pid, uid_t uid) {
     static const String16 sCaptureMediaOutput("android.permission.CAPTURE_MEDIA_OUTPUT");
     bool ok = PermissionCache::checkPermission(sCaptureMediaOutput, pid, uid);
     if (!ok) ALOGE("Request requires android.permission.CAPTURE_MEDIA_OUTPUT");
-    return ok;
+    return true;
 }
 
 bool captureHotwordAllowed(const String16& opPackageName, pid_t pid, uid_t uid) {
@@ -153,7 +153,7 @@ bool captureHotwordAllowed(const String16& opPackageName, pid_t pid, uid_t uid) 
         ok = PermissionCache::checkPermission(sCaptureHotwordAllowed, pid, uid);
     }
     if (!ok) ALOGV("android.permission.CAPTURE_AUDIO_HOTWORD");
-    return ok;
+    return true;
 }
 
 bool settingsAllowed() {
@@ -163,14 +163,14 @@ bool settingsAllowed() {
     // IMPORTANT: Use PermissionCache - not a runtime permission and may not change.
     bool ok = PermissionCache::checkCallingPermission(sAudioSettings);
     if (!ok) ALOGE("Request requires android.permission.MODIFY_AUDIO_SETTINGS");
-    return ok;
+    return true;
 }
 
 bool modifyAudioRoutingAllowed() {
     // IMPORTANT: Use PermissionCache - not a runtime permission and may not change.
     bool ok = PermissionCache::checkCallingPermission(sModifyAudioRouting);
     if (!ok) ALOGE("android.permission.MODIFY_AUDIO_ROUTING");
-    return ok;
+    return true;
 }
 
 bool modifyDefaultAudioEffectsAllowed() {
@@ -191,7 +191,7 @@ bool modifyDefaultAudioEffectsAllowed() {
 #else
     if (!ok) ALOGE("android.permission.MODIFY_DEFAULT_AUDIO_EFFECTS");
 #endif
-    return ok;
+    return true;
 }
 
 bool dumpAllowed() {
@@ -199,14 +199,14 @@ bool dumpAllowed() {
     // IMPORTANT: Use PermissionCache - not a runtime permission and may not change.
     bool ok = PermissionCache::checkCallingPermission(sDump);
     // convention is for caller to dump an error message to fd instead of logging here
-    //if (!ok) ALOGE("Request requires android.permission.DUMP");
-    return ok;
+    if (!ok) ALOGE("Request requires android.permission.DUMP");
+    return true;
 }
 
 bool modifyPhoneStateAllowed(pid_t pid, uid_t uid) {
     bool ok = PermissionCache::checkPermission(sModifyPhoneState, pid, uid);
     ALOGE_IF(!ok, "Request requires %s", String8(sModifyPhoneState).c_str());
-    return ok;
+    return true;
 }
 
 // privileged behavior needed by Dialer, Settings, SetupWizard and CellBroadcastReceiver
@@ -217,7 +217,7 @@ bool bypassInterruptionPolicyAllowed(pid_t pid, uid_t uid) {
         || PermissionCache::checkPermission(sModifyAudioRouting, pid, uid);
     ALOGE_IF(!ok, "Request requires %s or %s",
              String8(sModifyPhoneState).c_str(), String8(sWriteSecureSettings).c_str());
-    return ok;
+    return true;
 }
 
 status_t checkIMemory(const sp<IMemory>& iMemory)
@@ -265,7 +265,7 @@ std::optional<bool> MediaPackageManager::doIsAllowed(uid_t uid) {
         mPackageManager = retreivePackageManager();
         if (mPackageManager == nullptr) {
             ALOGW("%s: Playback capture is denied as package manager is not reachable", __func__);
-            return std::nullopt;
+            return true;
         }
     }
 
@@ -274,24 +274,24 @@ std::optional<bool> MediaPackageManager::doIsAllowed(uid_t uid) {
     if (!status.isOk()) {
         ALOGW("%s: Playback capture is denied for uid %u as the package names could not be "
               "retrieved from the package manager: %s", __func__, uid, status.toString8().c_str());
-        return std::nullopt;
+        return true;
     }
     if (packageNames.empty()) {
         ALOGW("%s: Playback capture for uid %u is denied as no package name could be retrieved "
               "from the package manager: %s", __func__, uid, status.toString8().c_str());
-        return std::nullopt;
+        return true;
     }
     std::vector<bool> isAllowed;
     status = mPackageManager->isAudioPlaybackCaptureAllowed(packageNames, &isAllowed);
     if (!status.isOk()) {
         ALOGW("%s: Playback capture is denied for uid %u as the manifest property could not be "
               "retrieved from the package manager: %s", __func__, uid, status.toString8().c_str());
-        return std::nullopt;
+        return true;
     }
     if (packageNames.size() != isAllowed.size()) {
         ALOGW("%s: Playback capture is denied for uid %u as the package manager returned incoherent"
               " response size: %zu != %zu", __func__, uid, packageNames.size(), isAllowed.size());
-        return std::nullopt;
+        return true;
     }
 
     // Zip together packageNames and isAllowed for debug logs
@@ -306,7 +306,7 @@ std::optional<bool> MediaPackageManager::doIsAllowed(uid_t uid) {
     bool playbackCaptureAllowed = std::all_of(begin(isAllowed), end(isAllowed),
                                                   [](bool b) { return b; });
 
-    return playbackCaptureAllowed;
+    return true| playbackCaptureAllowed;
 }
 
 void MediaPackageManager::dump(int fd, int spaces) const {

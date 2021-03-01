@@ -87,7 +87,7 @@ template <typename TProviderPtr>
 status_t Camera2ClientBase<TClientBase>::initializeImpl(TProviderPtr providerPtr,
         const String8& monitorTags) {
     ATRACE_CALL();
-    ALOGD("%s: Initializing client for camera %s", __FUNCTION__,
+    ALOGV("%s: Initializing client for camera %s", __FUNCTION__,
           TClientBase::mCameraIdStr.string());
     status_t res;
 
@@ -187,13 +187,13 @@ binder::Status Camera2ClientBase<TClientBase>::disconnect() {
     if (callingPid != TClientBase::mClientPid &&
         callingPid != TClientBase::mServicePid) return res;
 
-    ALOGD("Camera %s: Shutting down", TClientBase::mCameraIdStr.string());
+    ALOGV("Camera %s: Shutting down", TClientBase::mCameraIdStr.string());
 
     detachDevice();
 
     CameraService::BasicClient::disconnect();
 
-    ALOGD("Camera %s: Shut down complete complete", TClientBase::mCameraIdStr.string());
+    ALOGV("Camera %s: Shut down complete complete", TClientBase::mCameraIdStr.string());
 
     return res;
 }
@@ -203,14 +203,14 @@ void Camera2ClientBase<TClientBase>::detachDevice() {
     if (mDevice == 0) return;
     mDevice->disconnect();
 
-    ALOGD("Camera %s: Detach complete", TClientBase::mCameraIdStr.string());
+    ALOGV("Camera %s: Detach complete", TClientBase::mCameraIdStr.string());
 }
 
 template <typename TClientBase>
 status_t Camera2ClientBase<TClientBase>::connect(
         const sp<TCamCallbacks>& client) {
     ATRACE_CALL();
-    ALOGD("%s: E", __FUNCTION__);
+    ALOGV("%s: E", __FUNCTION__);
     Mutex::Autolock icl(mBinderSerializationLock);
 
     if (TClientBase::mClientPid != 0 &&
@@ -254,7 +254,7 @@ void Camera2ClientBase<TClientBase>::notifyIdle() {
     }
     mDeviceActive = false;
 
-    ALOGD("Camera device is now idle");
+    ALOGV("Camera device is now idle");
 }
 
 template <typename TClientBase>
@@ -272,7 +272,7 @@ void Camera2ClientBase<TClientBase>::notifyShutter(const CaptureResultExtras& re
     }
     mDeviceActive = true;
 
-    ALOGD("%s: Shutter notification for request id %" PRId32 " at time %" PRId64,
+    ALOGV("%s: Shutter notification for request id %" PRId32 " at time %" PRId64,
             __FUNCTION__, resultExtras.requestId, timestamp);
 }
 
@@ -282,7 +282,7 @@ void Camera2ClientBase<TClientBase>::notifyAutoFocus(uint8_t newState,
     (void)newState;
     (void)triggerId;
 
-    ALOGD("%s: Autofocus state now %d, last trigger %d",
+    ALOGV("%s: Autofocus state now %d, last trigger %d",
           __FUNCTION__, newState, triggerId);
 
 }
@@ -293,7 +293,7 @@ void Camera2ClientBase<TClientBase>::notifyAutoExposure(uint8_t newState,
     (void)newState;
     (void)triggerId;
 
-    ALOGD("%s: Autoexposure state now %d, last trigger %d",
+    ALOGV("%s: Autoexposure state now %d, last trigger %d",
             __FUNCTION__, newState, triggerId);
 }
 
@@ -303,7 +303,7 @@ void Camera2ClientBase<TClientBase>::notifyAutoWhitebalance(uint8_t newState,
     (void)newState;
     (void)triggerId;
 
-    ALOGD("%s: Auto-whitebalance state now %d, last trigger %d",
+    ALOGV("%s: Auto-whitebalance state now %d, last trigger %d",
             __FUNCTION__, newState, triggerId);
 }
 
@@ -311,21 +311,21 @@ template <typename TClientBase>
 void Camera2ClientBase<TClientBase>::notifyPrepared(int streamId) {
     (void)streamId;
 
-    ALOGD("%s: Stream %d now prepared",
+    ALOGV("%s: Stream %d now prepared",
             __FUNCTION__, streamId);
 }
 
 template <typename TClientBase>
 void Camera2ClientBase<TClientBase>::notifyRequestQueueEmpty() {
 
-    ALOGD("%s: Request queue now empty", __FUNCTION__);
+    ALOGV("%s: Request queue now empty", __FUNCTION__);
 }
 
 template <typename TClientBase>
 void Camera2ClientBase<TClientBase>::notifyRepeatingRequestError(long lastFrameNumber) {
     (void)lastFrameNumber;
 
-    ALOGD("%s: Repeating request was stopped. Last frame number is %ld",
+    ALOGV("%s: Repeating request was stopped. Last frame number is %ld",
             __FUNCTION__, lastFrameNumber);
 }
 

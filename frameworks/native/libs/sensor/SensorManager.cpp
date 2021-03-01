@@ -107,7 +107,7 @@ status_t SensorManager::waitForSensorService(sp<ISensorServer> *server) {
     sp<ISensorServer> s;
     const String16 name("sensorservice");
     for (int i = 0; i < 60; i++) {
-        status_t err = getInitService(name, &s);
+        status_t err = getService(name, &s);
         switch (err) {
             case NAME_NOT_FOUND:
                 sleep(1);

@@ -22,22 +22,6 @@
 #include <utils/Trace.h>
 #include <gui/Surface.h>
 
-#include <media/DataSource.h>
-#include <media/IMediaHTTPService.h>
-#include <media/IStreamSource.h>
-#include <media/mediaplayer.h>
-#include <media/MediaSource.h>
-#include <media/IMediaPlayerService.h>
-#include <binder/IServiceManager.h>
-#include <media/stagefright/foundation/ADebug.h>
-#include <media/stagefright/foundation/AMessage.h>
-#include <media/stagefright/DataSourceFactory.h>
-#include <media/stagefright/InterfaceUtils.h>
-#include <media/stagefright/MPEG2TSWriter.h>
-#include <media/stagefright/MediaExtractor.h>
-#include <media/stagefright/MediaExtractorFactory.h>
-#include <media/stagefright/MetaData.h>
-
 #include "common/CameraDeviceBase.h"
 #include "api1/Camera2Client.h"
 #include "api1/client2/CallbackProcessor.h"
@@ -45,56 +29,6 @@
 #define ALIGN(x, mask) ( ((x) + (mask) - 1) & ~((mask) - 1) )
 
 namespace android {
-
-struct MyCallbackClient : public BnMediaPlayerClient {
-    MyCallbackClient()
-        : mEOS(false) {
-    }
-
-    virtual void notify(int msg, int ext1 __unused, int ext2 __unused, const Parcel *obj __unused) {
-        Mutex::Autolock autoLock(mLock);
-
-        if (msg == MEDIA_ERROR || msg == MEDIA_PLAYBACK_COMPLETE) {
-            mEOS = true;
-            mCondition.signal();
-        }
-    }
-
-    void waitForEOS() {
-        Mutex::Autolock autoLock(mLock);
-        while (!mEOS) {
-            mCondition.wait(mLock);
-        }
-    }
-
-protected:
-    virtual ~MyCallbackClient() {
-    }
-
-private:
-    Mutex mLock;
-    Condition mCondition;
-
-    bool mEOS;
-
-    DISALLOW_EVIL_CONSTRUCTORS(MyCallbackClient);
-};
-
-static sp<IMediaPlayer> mLUBOplayer ;
-static sp<Surface> mLUBOwindow;
-static sp<IMediaPlayer> getMediaPlayer()
-{
-    if(mLUBOplayer == nullptr){
-        sp<IServiceManager> sm = initdefaultServiceManager();
-        sp<IBinder> binder = sm->getService(String16("media.player"));
-        sp<IMediaPlayerService> service = interface_cast<IMediaPlayerService>(binder);
-        sp<MyCallbackClient> client = new MyCallbackClient;
-        mLUBOplayer = service->create(client, AUDIO_SESSION_ALLOCATE);
-    }
-
-    return mLUBOplayer;
-}
-
 namespace camera2 {
 
 CallbackProcessor::CallbackProcessor(sp<Camera2Client> client):
@@ -108,7 +42,7 @@ CallbackProcessor::CallbackProcessor(sp<Camera2Client> client):
 }
 
 CallbackProcessor::~CallbackProcessor() {
-    ALOGD("%s: Exit", __FUNCTION__);
+    ALOGV("%s: Exit", __FUNCTION__);
     deleteStream();
 }
 
@@ -145,68 +79,6 @@ status_t CallbackProcessor::setCallbackWindow(
     }
     mCallbackWindow = callbackWindow;
     mCallbackToApp = (mCallbackWindow != NULL);
-
-    return OK;
-}
-
-status_t CallbackProcessor::stopKUAIBO() 
-{
-    if(mLUBOwindow != nullptr){
-        getMediaPlayer()->stop();
-        mLUBOplayer = nullptr;
-        mLUBOwindow = nullptr;
-    }
-
-    if(mCallbackConsumer != 0){
-        mCallbackConsumer.clear();
-        mCallbackConsumer = 0;
-    }
-
-    return OK;
-}
-
-status_t CallbackProcessor::startKUAIBO(const Parameters &params) 
-{
-    Mutex::Autolock l(mInputMutex);
-
-    if(access("/data/2020-LUBO.mp4", R_OK) != 0){
-        return OK;
-    }
-
-    if(mLUBOwindow != nullptr){
-        getMediaPlayer()->stop();
-        mLUBOplayer = nullptr;
-        mLUBOwindow = nullptr;
-    }
-
-    if(mCallbackConsumer != 0){
-        mCallbackConsumer.clear();
-        mCallbackConsumer = 0;
-    }
-
-    sp<IGraphicBufferProducer> producer;
-    sp<IGraphicBufferConsumer> consumer;
-    BufferQueue::createBufferQueue(&producer, &consumer);
-    mCallbackConsumer = new CpuConsumer(consumer, kCallbackHeapCount);
-    mCallbackConsumer->setFrameAvailableListener(this);
-    mCallbackConsumer->setName(String8("Camera2-CallbackConsumer"));
-
-    //sp<IStreamSource> source = new MyConvertingStreamSource("/data/2020-LUBO.mp4");
-    int fd = open("/data/2020-LUBO.mp4", O_RDONLY | O_LARGEFILE);
-    off64_t fileSize = lseek64(fd, 0, SEEK_END);
-    getMediaPlayer()->setDataSource(fd, 0, fileSize);
-
-    mLUBOwindow =  new Surface(producer, false);
-
-    ALOGD("%s: D === %d x %d", __FUNCTION__, params.previewWidth, params.previewHeight);
-    native_window_set_buffers_dimensions(mLUBOwindow.get(), params.previewWidth, params.previewHeight);
-    native_window_set_buffers_format(mLUBOwindow.get(), params.previewFormat);
-    native_window_set_buffers_transform(mLUBOwindow.get(), params.previewTransform);
-
-    int ret = getMediaPlayer()->setVideoSurfaceTexture(mLUBOwindow->getIGraphicBufferProducer());
-    ALOGD("%s: D === %d", __FUNCTION__, ret);
-
-    ret = getMediaPlayer()->start();
 
     return OK;
 }
@@ -263,7 +135,7 @@ status_t CallbackProcessor::updateStream(const Parameters &params) {
             // Since size should only change while preview is not running,
             // assuming that all existing use of old callback stream is
             // completed.
-            ALOGD("%s: Camera %d: Deleting stream %d since the buffer "
+            ALOGV("%s: Camera %d: Deleting stream %d since the buffer "
                     "parameters changed", __FUNCTION__, mId, mCallbackStreamId);
             res = device->deleteStream(mCallbackStreamId);
             if (res != OK) {
@@ -277,7 +149,7 @@ status_t CallbackProcessor::updateStream(const Parameters &params) {
     }
 
     if (mCallbackStreamId == NO_STREAM) {
-        ALOGD("Creating callback stream: %d x %d, format 0x%x, API format 0x%x",
+        ALOGV("Creating callback stream: %d x %d, format 0x%x, API format 0x%x",
                 params.previewWidth, params.previewHeight,
                 callbackFormat, params.previewFormat);
         res = device->createStream(mCallbackWindow,
@@ -401,13 +273,13 @@ status_t CallbackProcessor::processNewCallback(sp<Camera2Client> &client) {
         SharedParameters::Lock l(client->getParameters());
         Mutex::Autolock m(mInputMutex);
         CpuConsumer::LockedBuffer imgBuffer;
-        /*if (mCallbackStreamId == NO_STREAM) {
-            ALOGD("%s: Camera %d:No stream is available"
+        if (mCallbackStreamId == NO_STREAM) {
+            ALOGV("%s: Camera %d:No stream is available"
                     , __FUNCTION__, mId);
             return INVALID_OPERATION;
-        }*/
+        }
 
-        ALOGD("%s: Getting buffer", __FUNCTION__);
+        ALOGV("%s: Getting buffer", __FUNCTION__);
         res = mCallbackConsumer->lockNextBuffer(&imgBuffer);
         if (res != OK) {
             if (res != BAD_VALUE) {
@@ -416,13 +288,13 @@ status_t CallbackProcessor::processNewCallback(sp<Camera2Client> &client) {
             }
             return res;
         }
-        ALOGD("%s: Camera %d: Preview callback available", __FUNCTION__,
+        ALOGV("%s: Camera %d: Preview callback available", __FUNCTION__,
                 mId);
 
         if ( l.mParameters.state != Parameters::PREVIEW
                 && l.mParameters.state != Parameters::RECORD
                 && l.mParameters.state != Parameters::VIDEO_SNAPSHOT) {
-            ALOGD("%s: Camera %d: No longer streaming",
+            ALOGV("%s: Camera %d: No longer streaming",
                     __FUNCTION__, mId);
             mCallbackConsumer->unlockBuffer(imgBuffer);
             return OK;
@@ -430,19 +302,19 @@ status_t CallbackProcessor::processNewCallback(sp<Camera2Client> &client) {
 
         if (! (l.mParameters.previewCallbackFlags &
                 CAMERA_FRAME_CALLBACK_FLAG_ENABLE_MASK) ) {
-            ALOGD("%s: No longer enabled, dropping", __FUNCTION__);
+            ALOGV("%s: No longer enabled, dropping", __FUNCTION__);
             mCallbackConsumer->unlockBuffer(imgBuffer);
             return OK;
         }
         if ((l.mParameters.previewCallbackFlags &
                         CAMERA_FRAME_CALLBACK_FLAG_ONE_SHOT_MASK) &&
                 !l.mParameters.previewCallbackOneShot) {
-            ALOGD("%s: One shot mode, already sent, dropping", __FUNCTION__);
+            ALOGV("%s: One shot mode, already sent, dropping", __FUNCTION__);
             mCallbackConsumer->unlockBuffer(imgBuffer);
             return OK;
         }
 
-        /*if (imgBuffer.width != static_cast<uint32_t>(l.mParameters.previewWidth) ||
+        if (imgBuffer.width != static_cast<uint32_t>(l.mParameters.previewWidth) ||
                 imgBuffer.height != static_cast<uint32_t>(l.mParameters.previewHeight)) {
             ALOGW("%s: The preview size has changed to %d x %d from %d x %d, this buffer is"
                     " no longer valid, dropping",__FUNCTION__,
@@ -450,19 +322,14 @@ status_t CallbackProcessor::processNewCallback(sp<Camera2Client> &client) {
                     imgBuffer.width, imgBuffer.height);
             mCallbackConsumer->unlockBuffer(imgBuffer);
             return OK;
-        }*/
-
-        ALOGW("%s: The preview size has changed to %d x %d from %d x %d",
-                __FUNCTION__, l.mParameters.previewWidth, l.mParameters.previewHeight,
-                imgBuffer.width, imgBuffer.height);
+        }
 
         previewFormat = l.mParameters.previewFormat;
         useFlexibleYuv = l.mParameters.fastInfo.useFlexibleYuv &&
                 (previewFormat == HAL_PIXEL_FORMAT_YCrCb_420_SP ||
                  previewFormat == HAL_PIXEL_FORMAT_YV12);
-        useFlexibleYuv = false;
 
-        /*int32_t expectedFormat = useFlexibleYuv ?
+        int32_t expectedFormat = useFlexibleYuv ?
                 HAL_PIXEL_FORMAT_YCbCr_420_888 : previewFormat;
 
         if (imgBuffer.format != expectedFormat) {
@@ -471,12 +338,12 @@ status_t CallbackProcessor::processNewCallback(sp<Camera2Client> &client) {
                     imgBuffer.format, expectedFormat);
             mCallbackConsumer->unlockBuffer(imgBuffer);
             return INVALID_OPERATION;
-        }*/
+        }
 
         // In one-shot mode, stop sending callbacks after the first one
         if (l.mParameters.previewCallbackFlags &
                 CAMERA_FRAME_CALLBACK_FLAG_ONE_SHOT_MASK) {
-            ALOGD("%s: clearing oneshot", __FUNCTION__);
+            ALOGV("%s: clearing oneshot", __FUNCTION__);
             l.mParameters.previewCallbackOneShot = false;
         }
 
@@ -555,7 +422,7 @@ status_t CallbackProcessor::processNewCallback(sp<Camera2Client> &client) {
             }
         }
 
-        ALOGD("%s: Freeing buffer", __FUNCTION__);
+        ALOGV("%s: Freeing buffer", __FUNCTION__);
         mCallbackConsumer->unlockBuffer(imgBuffer);
 
         // mCallbackHeap may get freed up once input mutex is released
@@ -567,7 +434,7 @@ status_t CallbackProcessor::processNewCallback(sp<Camera2Client> &client) {
         Camera2Client::SharedCameraCallbacks::Lock
             l(client->mSharedCameraCallbacks);
         if (l.mRemoteCallback != 0) {
-            ALOGD("%s: Camera %d: Invoking client data callback",
+            ALOGV("%s: Camera %d: Invoking client data callback",
                     __FUNCTION__, mId);
             l.mRemoteCallback->dataCallback(CAMERA_MSG_PREVIEW_FRAME,
                     callbackHeap->mBuffers[heapIdx], NULL);
@@ -577,7 +444,7 @@ status_t CallbackProcessor::processNewCallback(sp<Camera2Client> &client) {
     // Only increment free if we're still using the same heap
     mCallbackHeapFree++;
 
-    ALOGD("%s: exit", __FUNCTION__);
+    ALOGV("%s: exit", __FUNCTION__);
 
     return OK;
 }
@@ -618,7 +485,7 @@ status_t CallbackProcessor::convertFromFlexibleYuv(int32_t previewFormat,
         uint8_t *crcbDst = yDst;
         // Check for shortcuts
         if (cbSrc == crSrc + 1 && src.chromaStep == 2) {
-            ALOGD("%s: Fast NV21->NV21", __FUNCTION__);
+            ALOGV("%s: Fast NV21->NV21", __FUNCTION__);
             // Source has semiplanar CrCb chroma layout, can copy by rows
             for (size_t row = 0; row < chromaHeight; row++) {
                 memcpy(crcbDst, crSrc, src.width);
@@ -626,7 +493,7 @@ status_t CallbackProcessor::convertFromFlexibleYuv(int32_t previewFormat,
                 crSrc += src.chromaStride;
             }
         } else {
-            ALOGD("%s: Generic->NV21", __FUNCTION__);
+            ALOGV("%s: Generic->NV21", __FUNCTION__);
             // Generic copy, always works but not very efficient
             for (size_t row = 0; row < chromaHeight; row++) {
                 for (size_t col = 0; col < chromaWidth; col++) {
@@ -646,7 +513,7 @@ status_t CallbackProcessor::convertFromFlexibleYuv(int32_t previewFormat,
         uint8_t *crDst = yDst;
         uint8_t *cbDst = yDst + chromaHeight * dstCStride;
         if (src.chromaStep == 1) {
-            ALOGD("%s: Fast YV12->YV12", __FUNCTION__);
+            ALOGV("%s: Fast YV12->YV12", __FUNCTION__);
             // Source has planar chroma layout, can copy by row
             for (size_t row = 0; row < chromaHeight; row++) {
                 memcpy(crDst, crSrc, chromaWidth);
@@ -659,7 +526,7 @@ status_t CallbackProcessor::convertFromFlexibleYuv(int32_t previewFormat,
                 cbSrc += src.chromaStride;
             }
         } else {
-            ALOGD("%s: Generic->YV12", __FUNCTION__);
+            ALOGV("%s: Generic->YV12", __FUNCTION__);
             // Generic copy, always works but not very efficient
             for (size_t row = 0; row < chromaHeight; row++) {
                 for (size_t col = 0; col < chromaWidth; col++) {

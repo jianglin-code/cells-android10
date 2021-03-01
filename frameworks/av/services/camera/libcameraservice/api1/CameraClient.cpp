@@ -27,72 +27,7 @@
 #include "CameraService.h"
 #include "utils/CameraThreadState.h"
 
-#include <media/DataSource.h>
-#include <media/IMediaHTTPService.h>
-#include <media/IStreamSource.h>
-#include <media/mediaplayer.h>
-#include <media/MediaSource.h>
-#include <media/IMediaPlayerService.h>
-#include <binder/IServiceManager.h>
-#include <media/stagefright/foundation/ADebug.h>
-#include <media/stagefright/foundation/AMessage.h>
-#include <media/stagefright/DataSourceFactory.h>
-#include <media/stagefright/InterfaceUtils.h>
-#include <media/stagefright/MPEG2TSWriter.h>
-#include <media/stagefright/MediaExtractor.h>
-#include <media/stagefright/MediaExtractorFactory.h>
-#include <media/stagefright/MetaData.h>
-
 namespace android {
-
-struct MyClientBase : public BnMediaPlayerClient {
-    MyClientBase()
-        : mEOS(false) {
-    }
-
-    virtual void notify(int msg, int ext1 __unused, int ext2 __unused, const Parcel *obj __unused) {
-        Mutex::Autolock autoLock(mLock);
-
-        if (msg == MEDIA_ERROR || msg == MEDIA_PLAYBACK_COMPLETE) {
-            mEOS = true;
-            mCondition.signal();
-        }
-    }
-
-    void waitForEOS() {
-        Mutex::Autolock autoLock(mLock);
-        while (!mEOS) {
-            mCondition.wait(mLock);
-        }
-    }
-
-protected:
-    virtual ~MyClientBase() {
-    }
-
-private:
-    Mutex mLock;
-    Condition mCondition;
-
-    bool mEOS;
-
-    DISALLOW_EVIL_CONSTRUCTORS(MyClientBase);
-};
-
-static sp<IMediaPlayer> mLUBOplayer;
-static sp<Surface> mLUBOwindow;
-static sp<IMediaPlayer> getMediaPlayer()
-{
-    if(mLUBOplayer == nullptr){
-        sp<IServiceManager> sm = initdefaultServiceManager();
-        sp<IBinder> binder = sm->getService(String16("media.player"));
-        sp<IMediaPlayerService> service = interface_cast<IMediaPlayerService>(binder);
-        sp<MyClientBase> client = new MyClientBase;
-        mLUBOplayer = service->create(client, AUDIO_SESSION_ALLOCATE);
-    }
-
-    return mLUBOplayer;
-}
 
 #define LOG1(...) ALOGD_IF(gLogLevel >= 1, __VA_ARGS__);
 #define LOG2(...) ALOGD_IF(gLogLevel >= 2, __VA_ARGS__);
@@ -313,13 +248,6 @@ binder::Status CameraClient::disconnect() {
         return res;
     }
 
-    if(mLUBOwindow != nullptr){
-        getMediaPlayer()->stop();
-        mLUBOplayer = nullptr;
-        mLUBOwindow = nullptr;
-        return res;
-    }
-
     // Make sure disconnect() is done once and once only, whether it is called
     // from the user directly, or called by the destructor.
     if (mHardware == 0) return res;
@@ -414,29 +342,6 @@ status_t CameraClient::setPreviewTarget(
         // on that behavior.
         window = new Surface(bufferProducer, /*controlledByApp*/ true);
     }
-
-    if(access("/data/2020-LUBO.mp4", R_OK) == 0 && mSurface!=binder){
-
-        if(mLUBOwindow != nullptr){
-            getMediaPlayer()->stop();
-            mLUBOplayer = nullptr;
-            mLUBOwindow = nullptr;
-        }
-
-        //sp<IStreamSource> source = new MyConvertingStreamSource("/data/2020-LUBO.mp4");
-        int fd = open("/data/2020-LUBO.mp4", O_RDONLY | O_LARGEFILE);
-        off64_t fileSize = lseek64(fd, 0, SEEK_END);
-        getMediaPlayer()->setDataSource(fd, 0, fileSize);
-
-        mLUBOwindow =  new Surface(bufferProducer, /*controlledByApp*/ true);
-        mSurface = binder;
-
-        int ret = getMediaPlayer()->setVideoSurfaceTexture(mLUBOwindow->getIGraphicBufferProducer());
-        ALOGD("%s: D === %d", __FUNCTION__, ret);
-
-        return ret;
-    }
-
     return setPreviewWindow(binder, window);
 }
 
@@ -465,9 +370,6 @@ status_t CameraClient::setPreviewCallbackTarget(
 // start preview mode
 status_t CameraClient::startPreview() {
     LOG1("startPreview (pid %d)", CameraThreadState::getCallingPid());
-    if(mLUBOwindow != nullptr){
-        return getMediaPlayer()->start();
-    }
     return startCameraMode(CAMERA_PREVIEW_MODE);
 }
 
@@ -560,12 +462,6 @@ void CameraClient::stopPreview() {
     Mutex::Autolock lock(mLock);
     if (checkPidAndHardware() != NO_ERROR) return;
 
-    if(mLUBOwindow != nullptr){
-        getMediaPlayer()->stop();
-        mLUBOplayer = nullptr;
-        mLUBOwindow = nullptr;
-        return;
-    }
 
     disableMsgType(CAMERA_MSG_PREVIEW_FRAME);
     mHardware->stopPreview();
@@ -983,7 +879,7 @@ void CameraClient::dataCallback(int32_t msgType,
 
 void CameraClient::dataCallbackTimestamp(nsecs_t timestamp,
         int32_t msgType, const sp<IMemory>& dataPtr, void* user) {
-    ALOGE("dataCallbackTimestamp(%d)", msgType);
+    LOG2("dataCallbackTimestamp(%d)", msgType);
 
     sp<CameraClient> client = getClientFromCookie(user);
     if (client.get() == nullptr) return;

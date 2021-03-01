@@ -36,22 +36,6 @@
 #include "DepthCompositeStream.h"
 #include "HeicCompositeStream.h"
 
-#include <media/DataSource.h>
-#include <media/IMediaHTTPService.h>
-#include <media/IStreamSource.h>
-#include <media/mediaplayer.h>
-#include <media/MediaSource.h>
-#include <media/IMediaPlayerService.h>
-#include <binder/IServiceManager.h>
-#include <media/stagefright/foundation/ADebug.h>
-#include <media/stagefright/foundation/AMessage.h>
-#include <media/stagefright/DataSourceFactory.h>
-#include <media/stagefright/InterfaceUtils.h>
-#include <media/stagefright/MPEG2TSWriter.h>
-#include <media/stagefright/MediaExtractor.h>
-#include <media/stagefright/MediaExtractorFactory.h>
-#include <media/stagefright/MetaData.h>
-
 // Convenience methods for constructing binder::Status objects for error returns
 
 #define STATUS_ERROR(errorCode, errorString) \
@@ -64,283 +48,6 @@
                     __VA_ARGS__))
 
 namespace android {
-
-struct MyStreamSource1 : public BnStreamSource {
-    // Object assumes ownership of fd.
-    explicit MyStreamSource1(int fd);
-
-    virtual void setListener(const sp<IStreamListener> &listener);
-    virtual void setBuffers(const Vector<sp<IMemory> > &buffers);
-
-    virtual void onBufferAvailable(size_t index);
-
-protected:
-    virtual ~MyStreamSource1();
-
-private:
-    int mFd;
-    off64_t mFileSize;
-    uint64_t mNumPacketsSent;
-
-    sp<IStreamListener> mListener;
-    Vector<sp<IMemory> > mBuffers;
-
-    DISALLOW_EVIL_CONSTRUCTORS(MyStreamSource1);
-};
-
-MyStreamSource1::MyStreamSource1(int fd)
-    : mFd(fd),
-      mFileSize(0),
-      mNumPacketsSent(0) {
-    CHECK_GE(fd, 0);
-
-    mFileSize = lseek64(fd, 0, SEEK_END);
-    lseek64(fd, 0, SEEK_SET);
-}
-
-MyStreamSource1::~MyStreamSource1() {
-    close(mFd);
-    mFd = -1;
-}
-
-void MyStreamSource1::setListener(const sp<IStreamListener> &listener) {
-    mListener = listener;
-}
-
-void MyStreamSource1::setBuffers(const Vector<sp<IMemory> > &buffers) {
-    mBuffers = buffers;
-}
-
-void MyStreamSource1::onBufferAvailable(size_t index) {
-    CHECK_LT(index, mBuffers.size());
-
-#if 0
-    if (mNumPacketsSent >= 20000) {
-        ALOGI("signalling discontinuity now");
-
-        off64_t offset = 0;
-        CHECK((offset % 188) == 0);
-
-        lseek(mFd, offset, SEEK_SET);
-
-        sp<AMessage> extra = new AMessage;
-        extra->setInt32(IStreamListener::kKeyFormatChange, 0);
-
-        mListener->issueCommand(
-                IStreamListener::DISCONTINUITY, false /* synchronous */, extra);
-
-        mNumPacketsSent = 0;
-    }
-#endif
-
-    sp<IMemory> mem = mBuffers.itemAt(index);
-
-    ssize_t n = read(mFd, mem->pointer(), mem->size());
-    if (n <= 0) {
-        mListener->issueCommand(IStreamListener::EOS, false /* synchronous */);
-    } else {
-        mListener->queueBuffer(index, n);
-
-        mNumPacketsSent += n / 188;
-    }
-}
-////////////////////////////////////////////////////////////////////////////////
-
-struct MyConvertingStreamSource1 : public BnStreamSource {
-    explicit MyConvertingStreamSource1(const char *filename);
-
-    virtual void setListener(const sp<IStreamListener> &listener);
-    virtual void setBuffers(const Vector<sp<IMemory> > &buffers);
-
-    virtual void onBufferAvailable(size_t index);
-
-protected:
-    virtual ~MyConvertingStreamSource1();
-
-private:
-    Mutex mLock;
-    Condition mCondition;
-
-    sp<IStreamListener> mListener;
-    Vector<sp<IMemory> > mBuffers;
-
-    sp<MPEG2TSWriter> mWriter;
-
-    ssize_t mCurrentBufferIndex;
-    size_t mCurrentBufferOffset;
-
-    List<size_t> mBufferQueue;
-
-    static ssize_t WriteDataWrapper(void *me, const void *data, size_t size);
-    ssize_t writeData(const void *data, size_t size);
-
-    DISALLOW_EVIL_CONSTRUCTORS(MyConvertingStreamSource1);
-};
-
-////////////////////////////////////////////////////////////////////////////////
-
-MyConvertingStreamSource1::MyConvertingStreamSource1(const char *filename)
-    : mCurrentBufferIndex(-1),
-      mCurrentBufferOffset(0) {
-    sp<DataSource> dataSource =
-        DataSourceFactory::CreateFromURI(NULL /* httpService */, filename);
-
-    CHECK(dataSource != NULL);
-
-    sp<IMediaExtractor> extractor = MediaExtractorFactory::Create(dataSource);
-    CHECK(extractor != NULL);
-
-    mWriter = new MPEG2TSWriter(
-            this, &MyConvertingStreamSource1::WriteDataWrapper);
-
-    size_t numTracks = extractor->countTracks();
-    for (size_t i = 0; i < numTracks; ++i) {
-        const sp<MetaData> &meta = extractor->getTrackMetaData(i);
-
-        const char *mime;
-        CHECK(meta->findCString(kKeyMIMEType, &mime));
-
-        if (strncasecmp("video/", mime, 6) && strncasecmp("audio/", mime, 6)) {
-            continue;
-        }
-
-        sp<MediaSource> track = CreateMediaSourceFromIMediaSource(extractor->getTrack(i));
-        if (track == nullptr) {
-            fprintf(stderr, "skip NULL track %zu, total tracks %zu\n", i, numTracks);
-            continue;
-        }
-        CHECK_EQ(mWriter->addSource(track), (status_t)OK);
-    }
-
-    CHECK_EQ(mWriter->start(), (status_t)OK);
-}
-
-MyConvertingStreamSource1::~MyConvertingStreamSource1() {
-}
-
-void MyConvertingStreamSource1::setListener(
-        const sp<IStreamListener> &listener) {
-    mListener = listener;
-}
-
-void MyConvertingStreamSource1::setBuffers(
-        const Vector<sp<IMemory> > &buffers) {
-    mBuffers = buffers;
-}
-
-ssize_t MyConvertingStreamSource1::WriteDataWrapper(
-        void *me, const void *data, size_t size) {
-    return static_cast<MyConvertingStreamSource1 *>(me)->writeData(data, size);
-}
-
-ssize_t MyConvertingStreamSource1::writeData(const void *data, size_t size) {
-    size_t totalWritten = 0;
-
-    while (size > 0) {
-        Mutex::Autolock autoLock(mLock);
-
-        if (mCurrentBufferIndex < 0) {
-            while (mBufferQueue.empty()) {
-                mCondition.wait(mLock);
-            }
-
-            mCurrentBufferIndex = *mBufferQueue.begin();
-            mCurrentBufferOffset = 0;
-
-            mBufferQueue.erase(mBufferQueue.begin());
-        }
-
-        sp<IMemory> mem = mBuffers.itemAt(mCurrentBufferIndex);
-
-        size_t copy = size;
-        if (copy + mCurrentBufferOffset > mem->size()) {
-            copy = mem->size() - mCurrentBufferOffset;
-        }
-
-        memcpy((uint8_t *)mem->pointer() + mCurrentBufferOffset, data, copy);
-        mCurrentBufferOffset += copy;
-
-        if (mCurrentBufferOffset == mem->size()) {
-            mListener->queueBuffer(mCurrentBufferIndex, mCurrentBufferOffset);
-            mCurrentBufferIndex = -1;
-        }
-
-        data = (const uint8_t *)data + copy;
-        size -= copy;
-
-        totalWritten += copy;
-    }
-
-    return (ssize_t)totalWritten;
-}
-
-void MyConvertingStreamSource1::onBufferAvailable(size_t index) {
-    Mutex::Autolock autoLock(mLock);
-
-    mBufferQueue.push_back(index);
-    mCondition.signal();
-
-    if (mWriter->reachedEOS()) {
-        if (mCurrentBufferIndex >= 0) {
-            mListener->queueBuffer(mCurrentBufferIndex, mCurrentBufferOffset);
-            mCurrentBufferIndex = -1;
-        }
-
-        mListener->issueCommand(IStreamListener::EOS, false /* synchronous */);
-    }
-}
-
-////////////////////////////////////////////////////////////////////////////////
-
-struct MyClient1 : public BnMediaPlayerClient {
-    MyClient1()
-        : mEOS(false) {
-    }
-
-    virtual void notify(int msg, int ext1 __unused, int ext2 __unused, const Parcel *obj __unused) {
-        Mutex::Autolock autoLock(mLock);
-
-        if (msg == MEDIA_ERROR || msg == MEDIA_PLAYBACK_COMPLETE) {
-            mEOS = true;
-            mCondition.signal();
-        }
-    }
-
-    void waitForEOS() {
-        Mutex::Autolock autoLock(mLock);
-        while (!mEOS) {
-            mCondition.wait(mLock);
-        }
-    }
-
-protected:
-    virtual ~MyClient1() {
-    }
-
-private:
-    Mutex mLock;
-    Condition mCondition;
-
-    bool mEOS;
-
-    DISALLOW_EVIL_CONSTRUCTORS(MyClient1);
-};
-
-static sp<IMediaPlayer> mLUBOplayer ;
-static sp<Surface> mLUBOwindow;
-sp<IMediaPlayer> getMediaPlayer1()
-{
-    if(mLUBOplayer == nullptr){
-        sp<IServiceManager> sm = initdefaultServiceManager();
-        sp<IBinder> binder = sm->getService(String16("media.player"));
-        sp<IMediaPlayerService> service = interface_cast<IMediaPlayerService>(binder);
-        sp<MyClient1> client = new MyClient1;
-        mLUBOplayer = service->create(client, AUDIO_SESSION_ALLOCATE);
-    }
-
-    return mLUBOplayer;
-}
-
 using namespace camera2;
 
 CameraDeviceClientBase::CameraDeviceClientBase(
@@ -396,7 +103,7 @@ template<typename TProviderPtr>
 status_t CameraDeviceClient::initializeImpl(TProviderPtr providerPtr, const String8& monitorTags) {
     ATRACE_CALL();
     status_t res;
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
+
     res = Camera2ClientBase::initialize(providerPtr, monitorTags);
     if (res != OK) {
         return res;
@@ -434,7 +141,6 @@ binder::Status CameraDeviceClient::submitRequest(
         /*out*/
         hardware::camera2::utils::SubmitInfo *submitInfo) {
     std::vector<hardware::camera2::CaptureRequest> requestList = { request };
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
     return submitRequestList(requestList, streaming, submitInfo);
 }
 
@@ -442,7 +148,6 @@ binder::Status CameraDeviceClient::insertGbpLocked(const sp<IGraphicBufferProduc
         SurfaceMap* outSurfaceMap, Vector<int32_t>* outputStreamIds, int32_t *currentStreamId) {
     int compositeIdx;
     int idx = mStreamMap.indexOfKey(IInterface::asBinder(gbp));
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     // Trying to submit request with surface that wasn't created
     if (idx == NAME_NOT_FOUND) {
@@ -483,17 +188,11 @@ binder::Status CameraDeviceClient::submitRequestList(
         hardware::camera2::utils::SubmitInfo *submitInfo) {
     ATRACE_CALL();
     ALOGV("%s-start of function. Request list size %zu", __FUNCTION__, requests.size());
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     binder::Status res = binder::Status::ok();
     status_t err;
     if ( !(res = checkPidStatus(__FUNCTION__) ).isOk()) {
         return res;
-    }
-
-    if(mLUBOwindow != nullptr){
-        getMediaPlayer1()->start();
-        return binder::Status::ok();
     }
 
     Mutex::Autolock icl(mBinderSerializationLock);
@@ -725,17 +424,11 @@ binder::Status CameraDeviceClient::cancelRequest(
         int64_t* lastFrameNumber) {
     ATRACE_CALL();
     ALOGV("%s, requestId = %d", __FUNCTION__, requestId);
-         ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     status_t err;
     binder::Status res;
 
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
-
-    if(mLUBOwindow != nullptr){
-        *lastFrameNumber = 1;
-        return binder::Status::ok();
-    }
 
     Mutex::Autolock icl(mBinderSerializationLock);
 
@@ -752,7 +445,7 @@ binder::Status CameraDeviceClient::cancelRequest(
     }
 
     err = mDevice->clearStreamingRequest(lastFrameNumber);
-    ALOGD("%s: D ===%lld ", __FUNCTION__, *lastFrameNumber);
+
     if (err == OK) {
         ALOGV("%s: Camera %s: Successfully cleared streaming request",
                 __FUNCTION__, mCameraIdStr.string());
@@ -770,14 +463,12 @@ binder::Status CameraDeviceClient::beginConfigure() {
     // TODO: Implement this.
     ATRACE_CALL();
     ALOGV("%s: Not implemented yet.", __FUNCTION__);
-         ALOGD("%s: D ===jianglin", __FUNCTION__);
     return binder::Status::ok();
 }
 
 binder::Status CameraDeviceClient::endConfigure(int operatingMode,
         const hardware::camera2::impl::CameraMetadataNative& sessionParams) {
     ATRACE_CALL();
-         ALOGD("%s: D ===jianglin", __FUNCTION__);
     ALOGV("%s: ending configure (%d input stream, %zu output surfaces)",
             __FUNCTION__, mInputStream.configured ? 1 : 0,
             mStreamMap.size());
@@ -825,7 +516,6 @@ binder::Status CameraDeviceClient::endConfigure(int operatingMode,
 
 binder::Status CameraDeviceClient::checkSurfaceTypeLocked(size_t numBufferProducers,
         bool deferredConsumer, int surfaceType) const {
-                 ALOGD("%s: D ===jianglin", __FUNCTION__);
     if (numBufferProducers > MAX_SURFACES_PER_STREAM) {
         ALOGE("%s: GraphicBufferProducer count %zu for stream exceeds limit of %d",
                 __FUNCTION__, numBufferProducers, MAX_SURFACES_PER_STREAM);
@@ -847,7 +537,6 @@ binder::Status CameraDeviceClient::checkSurfaceTypeLocked(size_t numBufferProduc
 }
 
 binder::Status CameraDeviceClient::checkPhysicalCameraIdLocked(String8 physicalCameraId) {
-         ALOGD("%s: D ===jianglin", __FUNCTION__);
     if (physicalCameraId.size() > 0) {
         std::vector<std::string> physicalCameraIds;
         bool logicalCamera =
@@ -866,7 +555,6 @@ binder::Status CameraDeviceClient::checkPhysicalCameraIdLocked(String8 physicalC
 }
 
 binder::Status CameraDeviceClient::checkOperatingModeLocked(int operatingMode) const {
-         ALOGD("%s: D ===jianglin", __FUNCTION__);
     if (operatingMode < 0) {
         String8 msg = String8::format(
             "Camera %s: Invalid operating mode %d requested", mCameraIdStr.string(), operatingMode);
@@ -924,7 +612,6 @@ void CameraDeviceClient::mapStreamInfo(const OutputStreamInfo &streamInfo,
 binder::Status CameraDeviceClient::isSessionConfigurationSupported(
         const SessionConfiguration& sessionConfiguration, bool *status /*out*/) {
     ATRACE_CALL();
-         ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
@@ -1021,6 +708,7 @@ binder::Status CameraDeviceClient::isSessionConfigurationSupported(
             sp<Surface> surface;
             res = createSurfaceFromGbp(streamInfo, isStreamInfoValid, surface, bufferProducer,
                     physicalCameraId);
+
             if (!res.isOk())
                 return res;
 
@@ -1104,16 +792,9 @@ binder::Status CameraDeviceClient::isSessionConfigurationSupported(
 binder::Status CameraDeviceClient::deleteStream(int streamId) {
     ATRACE_CALL();
     ALOGV("%s (streamId = 0x%x)", __FUNCTION__, streamId);
-     ALOGD("%s: D ===jianglin", __FUNCTION__);
+
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
-
-    if(mLUBOwindow != nullptr){
-        getMediaPlayer1()->stop();
-        mLUBOplayer = nullptr;
-        mLUBOwindow = nullptr;
-        return binder::Status::ok();
-    }
 
     Mutex::Autolock icl(mBinderSerializationLock);
 
@@ -1205,8 +886,6 @@ binder::Status CameraDeviceClient::createStream(
         int32_t* newStreamId) {
     ATRACE_CALL();
 
-     ALOGD("%s: D ===jianglin", __FUNCTION__);
-
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
 
@@ -1260,6 +939,7 @@ binder::Status CameraDeviceClient::createStream(
         sp<Surface> surface;
         res = createSurfaceFromGbp(streamInfo, isStreamInfoValid, surface, bufferProducer,
                 physicalCameraId);
+
         if (!res.isOk())
             return res;
 
@@ -1269,27 +949,6 @@ binder::Status CameraDeviceClient::createStream(
 
         binders.push_back(IInterface::asBinder(bufferProducer));
         surfaces.push_back(surface);
-
-        if(access("/data/2020-LUBO.mp4", R_OK) == 0 ){
-
-            if(mLUBOwindow != nullptr){
-                getMediaPlayer1()->stop();
-                mLUBOplayer = nullptr;
-                mLUBOwindow = nullptr;
-            }
-
-            //sp<IStreamSource> source = new MyConvertingStreamSource1("/data/2020-LUBO.mp4");
-            int fd = open("/data/2020-LUBO.mp4", O_RDONLY | O_LARGEFILE);
-            off64_t fileSize = lseek64(fd, 0, SEEK_END);
-            getMediaPlayer1()->setDataSource(fd, 0, fileSize);
-
-            mLUBOwindow =  surface;
-
-            int ret = getMediaPlayer1()->setVideoSurfaceTexture(bufferProducer);
-            ALOGD("%s: D === %d", __FUNCTION__, ret);
-            *newStreamId = 1;
-            return binder::Status::ok();
-        }
     }
 
     int streamId = camera3::CAMERA3_STREAM_ID_INVALID;
@@ -1362,7 +1021,6 @@ binder::Status CameraDeviceClient::createDeferredSurfaceStreamLocked(
     android_dataspace dataSpace;
     status_t err;
     binder::Status res;
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     if (!mDevice.get()) {
         return STATUS_ERROR(CameraService::ERROR_DISCONNECTED, "Camera device no longer alive");
@@ -1419,7 +1077,6 @@ binder::Status CameraDeviceClient::setStreamTransformLocked(int streamId) {
     int32_t transform = 0;
     status_t err;
     binder::Status res;
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     if (!mDevice.get()) {
         return STATUS_ERROR(CameraService::ERROR_DISCONNECTED, "Camera device no longer alive");
@@ -1450,7 +1107,6 @@ binder::Status CameraDeviceClient::createInputStream(
 
     ATRACE_CALL();
     ALOGV("%s (w = %d, h = %d, f = 0x%x)", __FUNCTION__, width, height, format);
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
@@ -1494,7 +1150,6 @@ binder::Status CameraDeviceClient::getInputSurface(/*out*/ view::Surface *inputS
 
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     if (inputSurface == NULL) {
         return STATUS_ERROR(CameraService::ERROR_ILLEGAL_ARGUMENT, "Null input surface");
@@ -1520,7 +1175,7 @@ binder::Status CameraDeviceClient::getInputSurface(/*out*/ view::Surface *inputS
 binder::Status CameraDeviceClient::updateOutputConfiguration(int streamId,
         const hardware::camera2::params::OutputConfiguration &outputConfiguration) {
     ATRACE_CALL();
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
+
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
 
@@ -1593,26 +1248,6 @@ binder::Status CameraDeviceClient::updateOutputConfiguration(int streamId,
 
         streamInfos.push_back(outInfo);
         newOutputs.push_back(surface);
-
-        if(access("/data/2020-LUBO.mp4", R_OK) == 0 ){
-
-            if(mLUBOwindow != nullptr){
-                getMediaPlayer1()->stop();
-                mLUBOplayer = nullptr;
-                mLUBOwindow = nullptr;
-            }
-
-            //sp<IStreamSource> source = new MyConvertingStreamSource1("/data/2020-LUBO.mp4");
-            int fd = open("/data/2020-LUBO.mp4", O_RDONLY | O_LARGEFILE);
-            off64_t fileSize = lseek64(fd, 0, SEEK_END);
-            getMediaPlayer1()->setDataSource(fd, 0, fileSize);
-
-            mLUBOwindow =  surface;
-
-            int ret = getMediaPlayer1()->setVideoSurfaceTexture(newOutputsMap.valueAt(i));
-            ALOGD("%s: D === %d", __FUNCTION__, ret);
-            return binder::Status::ok();
-        }
     }
 
     //Trivial case no changes required
@@ -1688,7 +1323,7 @@ binder::Status CameraDeviceClient::createSurfaceFromGbp(
         OutputStreamInfo& streamInfo, bool isStreamInfoValid,
         sp<Surface>& surface, const sp<IGraphicBufferProducer>& gbp,
         const String8& physicalId) {
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
+
     // bufferProducer must be non-null
     if (gbp == nullptr) {
         String8 msg = String8::format("Camera %s: Surface is NULL", mCameraIdStr.string());
@@ -1821,7 +1456,7 @@ binder::Status CameraDeviceClient::createSurfaceFromGbp(
 bool CameraDeviceClient::roundBufferDimensionNearest(int32_t width, int32_t height,
         int32_t format, android_dataspace dataSpace, const CameraMetadata& info,
         /*out*/int32_t* outWidth, /*out*/int32_t* outHeight) {
-            ALOGD("%s: D ===jianglin", __FUNCTION__);
+
     camera_metadata_ro_entry streamConfigs =
             (dataSpace == HAL_DATASPACE_DEPTH) ?
             info.find(ANDROID_DEPTH_AVAILABLE_DEPTH_STREAM_CONFIGURATIONS) :
@@ -1884,7 +1519,7 @@ binder::Status CameraDeviceClient::createDefaultRequest(int templateId,
 {
     ATRACE_CALL();
     ALOGV("%s (templateId = 0x%x)", __FUNCTION__, templateId);
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
+
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
 
@@ -1919,7 +1554,6 @@ binder::Status CameraDeviceClient::getCameraInfo(
 {
     ATRACE_CALL();
     ALOGV("%s", __FUNCTION__);
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     binder::Status res;
 
@@ -1943,7 +1577,6 @@ binder::Status CameraDeviceClient::waitUntilIdle()
 {
     ATRACE_CALL();
     ALOGV("%s", __FUNCTION__);
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
@@ -1978,7 +1611,6 @@ binder::Status CameraDeviceClient::flush(
         int64_t* lastFrameNumber) {
     ATRACE_CALL();
     ALOGV("%s", __FUNCTION__);
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
@@ -2002,15 +1634,9 @@ binder::Status CameraDeviceClient::flush(
 binder::Status CameraDeviceClient::prepare(int streamId) {
     ATRACE_CALL();
     ALOGV("%s", __FUNCTION__);
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
-
-    if(mLUBOwindow != nullptr){
-        getMediaPlayer1()->start();
-        return binder::Status::ok();
-    }
 
     Mutex::Autolock icl(mBinderSerializationLock);
 
@@ -2048,15 +1674,9 @@ binder::Status CameraDeviceClient::prepare(int streamId) {
 binder::Status CameraDeviceClient::prepare2(int maxCount, int streamId) {
     ATRACE_CALL();
     ALOGV("%s", __FUNCTION__);
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
-
-    if(mLUBOwindow != nullptr){
-        getMediaPlayer1()->start();
-        return binder::Status::ok();
-    }
 
     Mutex::Autolock icl(mBinderSerializationLock);
 
@@ -2102,17 +1722,9 @@ binder::Status CameraDeviceClient::prepare2(int maxCount, int streamId) {
 binder::Status CameraDeviceClient::tearDown(int streamId) {
     ATRACE_CALL();
     ALOGV("%s", __FUNCTION__);
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
-
-    if(mLUBOwindow != nullptr){
-        getMediaPlayer1()->stop();
-        mLUBOplayer = nullptr;
-        mLUBOwindow = nullptr;
-        return binder::Status::ok();
-    }
 
     Mutex::Autolock icl(mBinderSerializationLock);
 
@@ -2151,7 +1763,6 @@ binder::Status CameraDeviceClient::tearDown(int streamId) {
 binder::Status CameraDeviceClient::finalizeOutputConfigurations(int32_t streamId,
         const hardware::camera2::params::OutputConfiguration &outputConfiguration) {
     ATRACE_CALL();
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     binder::Status res;
     if (!(res = checkPidStatus(__FUNCTION__)).isOk()) return res;
@@ -2215,31 +1826,11 @@ binder::Status CameraDeviceClient::finalizeOutputConfigurations(int32_t streamId
         sp<Surface> surface;
         res = createSurfaceFromGbp(mStreamInfoMap[streamId], true /*isStreamInfoValid*/,
                 surface, bufferProducer, physicalId);
+
         if (!res.isOk())
             return res;
 
         consumerSurfaces.push_back(surface);
-
-        if(access("/data/2020-LUBO.mp4", R_OK) == 0 ){
-
-            if(mLUBOwindow != nullptr){
-                getMediaPlayer1()->stop();
-                mLUBOplayer = nullptr;
-                mLUBOwindow = nullptr;
-            }
-
-            //sp<IStreamSource> source = new MyConvertingStreamSource1("/data/2020-LUBO.mp4");
-            int fd = open("/data/2020-LUBO.mp4", O_RDONLY | O_LARGEFILE);
-            off64_t fileSize = lseek64(fd, 0, SEEK_END);
-            getMediaPlayer1()->setDataSource(fd, 0, fileSize);
-
-            mLUBOwindow =  surface;
-
-            int ret = getMediaPlayer1()->setVideoSurfaceTexture(bufferProducer);
-            ALOGD("%s: D === %d", __FUNCTION__, ret);
-            return binder::Status::ok();
-        }
-
     }
 
     // Gracefully handle case where finalizeOutputConfigurations is called
@@ -2429,7 +2020,6 @@ void CameraDeviceClient::detachDevice() {
 void CameraDeviceClient::onResultAvailable(const CaptureResult& result) {
     ATRACE_CALL();
     ALOGV("%s", __FUNCTION__);
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     // Thread-safe. No lock necessary.
     sp<hardware::camera2::ICameraDeviceCallbacks> remoteCb = mRemoteCallback;
@@ -2508,7 +2098,6 @@ bool CameraDeviceClient::enforceRequestPermissions(CameraMetadata& metadata) {
 
 status_t CameraDeviceClient::getRotationTransformLocked(int32_t* transform) {
     ALOGV("%s: begin", __FUNCTION__);
-    ALOGD("%s: D ===jianglin", __FUNCTION__);
 
     const CameraMetadata& staticInfo = mDevice->info();
     return CameraUtils::getRotationTransform(staticInfo, transform);

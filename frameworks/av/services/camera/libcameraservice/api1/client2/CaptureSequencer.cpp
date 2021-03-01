@@ -51,11 +51,11 @@ CaptureSequencer::CaptureSequencer(wp<Camera2Client> client):
         mTriggerId(0),
         mTimeoutCount(0),
         mCaptureId(Camera2Client::kCaptureRequestIdStart) {
-    ALOGD("%s", __FUNCTION__);
+    ALOGV("%s", __FUNCTION__);
 }
 
 CaptureSequencer::~CaptureSequencer() {
-    ALOGD("%s: Exit", __FUNCTION__);
+    ALOGV("%s: Exit", __FUNCTION__);
 }
 
 void CaptureSequencer::setZslProcessor(const wp<ZslProcessor>& processor) {
@@ -64,7 +64,7 @@ void CaptureSequencer::setZslProcessor(const wp<ZslProcessor>& processor) {
 }
 
 status_t CaptureSequencer::startCapture() {
-    ALOGD("%s", __FUNCTION__);
+    ALOGV("%s", __FUNCTION__);
     ATRACE_CALL();
     Mutex::Autolock l(mInputMutex);
     if (mBusy) {
@@ -80,7 +80,7 @@ status_t CaptureSequencer::startCapture() {
 
 status_t CaptureSequencer::waitUntilIdle(nsecs_t timeout) {
     ATRACE_CALL();
-    ALOGD("%s: Waiting for idle", __FUNCTION__);
+    ALOGV("%s: Waiting for idle", __FUNCTION__);
     Mutex::Autolock l(mStateMutex);
     status_t res = -1;
     while (mCaptureState != IDLE) {
@@ -91,7 +91,7 @@ status_t CaptureSequencer::waitUntilIdle(nsecs_t timeout) {
 
         timeout -= (systemTime() - startTime);
     }
-    ALOGD("%s: Now idle", __FUNCTION__);
+    ALOGV("%s: Now idle", __FUNCTION__);
     return OK;
 }
 
@@ -144,7 +144,7 @@ void CaptureSequencer::notifyError(int32_t errorCode, const CaptureResultExtras&
 
 void CaptureSequencer::onResultAvailable(const CaptureResult &result) {
     ATRACE_CALL();
-    ALOGD("%s: New result available.", __FUNCTION__);
+    ALOGV("%s: New result available.", __FUNCTION__);
     Mutex::Autolock l(mInputMutex);
     mNewFrameId = result.mResultExtras.requestId;
     mNewFrame = result.mMetadata;
@@ -157,7 +157,7 @@ void CaptureSequencer::onResultAvailable(const CaptureResult &result) {
 void CaptureSequencer::onCaptureAvailable(nsecs_t timestamp,
         const sp<MemoryBase>& captureBuffer, bool captureError) {
     ATRACE_CALL();
-    ALOGD("%s", __FUNCTION__);
+    ALOGV("%s", __FUNCTION__);
     Mutex::Autolock l(mInputMutex);
     mCaptureTimestamp = timestamp;
     mCaptureBuffer = captureBuffer;
@@ -245,7 +245,7 @@ bool CaptureSequencer::threadLoop() {
         if (mCaptureState != IDLE) {
             ATRACE_ASYNC_BEGIN(kStateNames[mCaptureState], mStateTransitionCount);
         }
-        ALOGD("Camera %d: New capture state %s",
+        ALOGV("Camera %d: New capture state %s",
                 client->getCameraId(), kStateNames[mCaptureState]);
         mStateChanged.signal();
     }
@@ -320,7 +320,7 @@ CaptureSequencer::CaptureState CaptureSequencer::manageDone(sp<Camera2Client> &c
     }
     sp<ZslProcessor> processor = mZslProcessor.promote();
     if (processor != 0) {
-        ALOGD("%s: Memory optimization, clearing ZSL queue",
+        ALOGV("%s: Memory optimization, clearing ZSL queue",
               __FUNCTION__);
         processor->clearZslQueue();
     }
@@ -333,12 +333,12 @@ CaptureSequencer::CaptureState CaptureSequencer::manageDone(sp<Camera2Client> &c
 
         Camera2Client::SharedCameraCallbacks::Lock
             l(client->mSharedCameraCallbacks);
-        ALOGD("%s: Sending still image to client", __FUNCTION__);
+        ALOGV("%s: Sending still image to client", __FUNCTION__);
         if (l.mRemoteCallback != 0) {
             l.mRemoteCallback->dataCallback(CAMERA_MSG_COMPRESSED_IMAGE,
                     mCaptureBuffer, NULL);
         } else {
-            ALOGD("%s: No client!", __FUNCTION__);
+            ALOGV("%s: No client!", __FUNCTION__);
         }
     }
     mCaptureBuffer.clear();
@@ -348,7 +348,7 @@ CaptureSequencer::CaptureState CaptureSequencer::manageDone(sp<Camera2Client> &c
 
 CaptureSequencer::CaptureState CaptureSequencer::manageStart(
         sp<Camera2Client> &client) {
-    ALOGD("%s", __FUNCTION__);
+    ALOGV("%s", __FUNCTION__);
     status_t res;
     ATRACE_CALL();
     SharedParameters::Lock l(client->getParameters());
@@ -380,7 +380,7 @@ CaptureSequencer::CaptureState CaptureSequencer::manageStart(
 
 CaptureSequencer::CaptureState CaptureSequencer::manageZslStart(
         sp<Camera2Client> &client) {
-    ALOGD("%s", __FUNCTION__);
+    ALOGV("%s", __FUNCTION__);
     status_t res;
     sp<ZslProcessor> processor = mZslProcessor.promote();
     if (processor == 0) {
@@ -397,7 +397,7 @@ CaptureSequencer::CaptureState CaptureSequencer::manageZslStart(
     res = processor->pushToReprocess(mCaptureId);
     if (res != OK) {
         if (res == NOT_ENOUGH_DATA) {
-            ALOGD("%s: Camera %d: ZSL queue doesn't have good frame, "
+            ALOGV("%s: Camera %d: ZSL queue doesn't have good frame, "
                     "falling back to normal capture", __FUNCTION__,
                     client->getCameraId());
         } else {
@@ -417,13 +417,13 @@ CaptureSequencer::CaptureState CaptureSequencer::manageZslStart(
 
 CaptureSequencer::CaptureState CaptureSequencer::manageZslWaiting(
         sp<Camera2Client> &/*client*/) {
-    ALOGD("%s", __FUNCTION__);
+    ALOGV("%s", __FUNCTION__);
     return DONE;
 }
 
 CaptureSequencer::CaptureState CaptureSequencer::manageZslReprocessing(
         sp<Camera2Client> &/*client*/) {
-    ALOGD("%s", __FUNCTION__);
+    ALOGV("%s", __FUNCTION__);
     return START;
 }
 
@@ -485,14 +485,14 @@ CaptureSequencer::CaptureState CaptureSequencer::manageStandardPrecaptureWait(
             // Waiting to see PRECAPTURE state
             if (mAETriggerId == mTriggerId) {
                 if (mAEState == ANDROID_CONTROL_AE_STATE_PRECAPTURE) {
-                    ALOGD("%s: Got precapture start", __FUNCTION__);
+                    ALOGV("%s: Got precapture start", __FUNCTION__);
                     mAeInPrecapture = true;
                     mTimeoutCount = kMaxTimeoutsForPrecaptureEnd;
                 } else if (mAEState == ANDROID_CONTROL_AE_STATE_CONVERGED ||
                         mAEState == ANDROID_CONTROL_AE_STATE_FLASH_REQUIRED) {
                     // It is legal to transit to CONVERGED or FLASH_REQUIRED
                     // directly after a trigger.
-                    ALOGD("%s: AE is already in good state, start capture", __FUNCTION__);
+                    ALOGV("%s: AE is already in good state, start capture", __FUNCTION__);
                     return STANDARD_CAPTURE;
                 }
             }
@@ -500,7 +500,7 @@ CaptureSequencer::CaptureState CaptureSequencer::manageStandardPrecaptureWait(
             // Waiting to see PRECAPTURE state end
             if (mAETriggerId == mTriggerId &&
                     mAEState != ANDROID_CONTROL_AE_STATE_PRECAPTURE) {
-                ALOGD("%s: Got precapture end", __FUNCTION__);
+                ALOGV("%s: Got precapture end", __FUNCTION__);
                 return STANDARD_CAPTURE;
             }
         }
@@ -758,7 +758,7 @@ status_t CaptureSequencer::updateCaptureRequest(const Parameters &params,
         Camera2Client::SharedCameraCallbacks::Lock
             l(client->mSharedCameraCallbacks);
 
-        ALOGD("%s: Notifying of shutter close to client", __FUNCTION__);
+        ALOGV("%s: Notifying of shutter close to client", __FUNCTION__);
         if (l.mRemoteCallback != 0) {
             // ShutterCallback
             l.mRemoteCallback->notifyCallback(CAMERA_MSG_SHUTTER,
@@ -768,7 +768,7 @@ status_t CaptureSequencer::updateCaptureRequest(const Parameters &params,
             l.mRemoteCallback->notifyCallback(CAMERA_MSG_RAW_IMAGE_NOTIFY,
                                             /*ext1*/0, /*ext2*/0);
         } else {
-            ALOGD("%s: No client!", __FUNCTION__);
+            ALOGV("%s: No client!", __FUNCTION__);
         }
     }
 }

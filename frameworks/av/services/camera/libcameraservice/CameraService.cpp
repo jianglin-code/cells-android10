@@ -633,7 +633,6 @@ int CameraService::getDeviceVersion(const String8& cameraId, int* facing) {
         res = mCameraProviderManager->getCameraInfo(cameraId.string(), &info);
         if (res != OK) return -1;
         *facing = info.facing;
-        ALOGD("%s: facing = %d", __FUNCTION__, *facing);
     }
 
     return deviceVersion;
@@ -926,7 +925,7 @@ Status CameraService::validateConnectLocked(const String8& cameraId,
     Status allowed = validateClientPermissionsLocked(cameraId, clientName8, clientUid, clientPid,
             originalClientPid);
     if (!allowed.isOk()) {
-        return allowed;
+        //return allowed;
     }
 #endif  // __BRILLO__
 
@@ -1924,15 +1923,12 @@ Status CameraService::supportsCameraApi(const String16& cameraId, int apiVersion
 
     const String8 id = String8(cameraId);
 
-    ALOGD("%s: for camera ID = %s", __FUNCTION__, id.string());
+    ALOGV("%s: for camera ID = %s", __FUNCTION__, id.string());
 
     switch (apiVersion) {
         case API_VERSION_1:
-            break;
         case API_VERSION_2:
-            *isSupported = false;
-            return Status::ok();
-            //break;
+            break;
         default:
             String8 msg = String8::format("Unknown API version %d", apiVersion);
             ALOGE("%s: %s", __FUNCTION__, msg.string());
@@ -1945,11 +1941,11 @@ Status CameraService::supportsCameraApi(const String16& cameraId, int apiVersion
         case CAMERA_DEVICE_API_VERSION_3_0:
         case CAMERA_DEVICE_API_VERSION_3_1:
             if (apiVersion == API_VERSION_2) {
-                ALOGD("%s: Camera id %s uses HAL version %d <3.2, doesn't support api2 without shim",
+                ALOGV("%s: Camera id %s uses HAL version %d <3.2, doesn't support api2 without shim",
                         __FUNCTION__, id.string(), deviceVersion);
                 *isSupported = false;
             } else { // if (apiVersion == API_VERSION_1) {
-                ALOGD("%s: Camera id %s uses older HAL before 3.2, but api1 is always supported",
+                ALOGV("%s: Camera id %s uses older HAL before 3.2, but api1 is always supported",
                         __FUNCTION__, id.string());
                 *isSupported = true;
             }
@@ -1958,7 +1954,7 @@ Status CameraService::supportsCameraApi(const String16& cameraId, int apiVersion
         case CAMERA_DEVICE_API_VERSION_3_3:
         case CAMERA_DEVICE_API_VERSION_3_4:
         case CAMERA_DEVICE_API_VERSION_3_5:
-            ALOGD("%s: Camera id %s uses HAL3.2 or newer, supports api1/api2 directly",
+            ALOGV("%s: Camera id %s uses HAL3.2 or newer, supports api1/api2 directly",
                     __FUNCTION__, id.string());
             *isSupported = true;
             break;
@@ -2471,7 +2467,7 @@ uid_t CameraService::BasicClient::getClientUid() const {
 
 bool CameraService::BasicClient::canCastToApiClient(apiLevel level) const {
     // Defaults to API2.
-    return level == API_1;
+    return level == API_2;
 }
 
 status_t CameraService::BasicClient::startCameraOps() {

@@ -11,6 +11,8 @@ import android.os.SystemProperties;
 import android.os.ServiceManager;
 import android.os.Looper;
 import android.os.RemoteException;
+import android.os.CellsManager;
+import android.os.ICellsManager;
 import android.view.View;
 import android.view.WindowManager;
 import android.view.animation.Animation;
@@ -132,8 +134,7 @@ public class SwitchActivity extends BaseActivity {
 
 		acquireWakeLock();
 
-		mCellsService = new CellsPrivateServiceManager(SwitchActivity.this,
-																ServiceManager.getService("CellsPrivateService"));
+		mCellsService = new CellsPrivateServiceManager(SwitchActivity.this, ServiceManager.getService("CellsPrivateService"));
 
 		int isPermission = ActivityCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE);
 		if (isPermission == PackageManager.PERMISSION_DENIED) {
@@ -383,8 +384,8 @@ public class SwitchActivity extends BaseActivity {
 		new Thread(new Runnable() {
 			@Override
 			public void run() {
-				CellsPrivateServiceManager mCellsInitService = new CellsPrivateServiceManager(SwitchActivity.this,
-																																		ServiceManager.getService("CellsPrivateService"));
+				CellsPrivateServiceManager mCellsInitService = 
+						new CellsPrivateServiceManager(SwitchActivity.this, ServiceManager.getInitService("CellsPrivateService"));
 
 				long beginTime=System.currentTimeMillis();
 				try{

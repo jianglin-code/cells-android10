@@ -246,7 +246,7 @@ status_t FrameProcessor::process3aState(const CaptureResult &frame,
 
     // Don't send 3A notifications for the same frame number twice
     if (frameNumber <= mLast3AFrameNumber) {
-        ALOGD("%s: Already sent 3A for frame number %d, skipping",
+        ALOGV("%s: Already sent 3A for frame number %d, skipping",
                 __FUNCTION__, frameNumber);
 
         // Remove the entry if there is one for this frame number in mPending3AStates.
@@ -286,7 +286,7 @@ status_t FrameProcessor::process3aState(const CaptureResult &frame,
     if (gotAEState && (frameNumber > mLastAEFrameNumber)) {
         if (pendingState.aeState != m3aState.aeState ||
                 pendingState.aeTriggerId > m3aState.aeTriggerId) {
-            ALOGD("%s: Camera %d: AE state %d->%d",
+            ALOGV("%s: Camera %d: AE state %d->%d",
                     __FUNCTION__, cameraId,
                     m3aState.aeState, pendingState.aeState);
             client->notifyAutoExposure(pendingState.aeState, pendingState.aeTriggerId);
@@ -301,7 +301,7 @@ status_t FrameProcessor::process3aState(const CaptureResult &frame,
         if (pendingState.afState != m3aState.afState ||
                 pendingState.afMode != m3aState.afMode ||
                 pendingState.afTriggerId != m3aState.afTriggerId) {
-            ALOGD("%s: Camera %d: AF state %d->%d. AF mode %d->%d. Trigger %d->%d",
+            ALOGV("%s: Camera %d: AF state %d->%d. AF mode %d->%d. Trigger %d->%d",
                     __FUNCTION__, cameraId,
                     m3aState.afState, pendingState.afState,
                     m3aState.afMode, pendingState.afMode,
@@ -318,7 +318,7 @@ status_t FrameProcessor::process3aState(const CaptureResult &frame,
     if (gotAWBState && (frameNumber > mLastAWBFrameNumber)) {
         if (pendingState.awbState != m3aState.awbState ||
                 pendingState.awbMode != m3aState.awbMode) {
-            ALOGD("%s: Camera %d: AWB state %d->%d. AWB mode %d->%d",
+            ALOGV("%s: Camera %d: AWB state %d->%d. AWB mode %d->%d",
                     __FUNCTION__, cameraId,
                     m3aState.awbState, pendingState.awbState,
                     m3aState.awbMode, pendingState.awbMode);
@@ -369,7 +369,7 @@ bool FrameProcessor::updatePendingState(const CameraMetadata& result, int32_t ta
     entry = result.find(tag);
     if (entry.count == 0) {
         const camera_metadata *metaBuffer = result.getAndLock();
-        ALOGD("%s: Camera %d: No %s provided by HAL for frame %d in this result!",
+        ALOGV("%s: Camera %d: No %s provided by HAL for frame %d in this result!",
                 __FUNCTION__, cameraId,
                 get_local_camera_metadata_tag_name(tag, metaBuffer),
                 frameNumber);
