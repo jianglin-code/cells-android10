@@ -44,7 +44,7 @@
 #define CELLD_LOCKFILE "/data/.celldlock"
 #define DEFL_CELL_DIR "/data/cells"
 #define DEFL_SDCARD_ROOT "/mnt/user/cells"
-#define DEFL_START_OPTS "-MSWdgimpwun"
+#define DEFL_START_OPTS "-MSdgimpwun"
 
 #define CONSOLE_READY_MSG "ready"
 #define CONSOLE_READY_MSG_LEN 8 
@@ -52,8 +52,6 @@
 #define MAX_NAME_LEN 64
 #define MAX_ARGS 20
 #define MAX_PATH_LEN 256
-
-#define MAX_CELL_NUM 5
 
 /* Update CELL_CMD_REV if you change this enum in any way */
 enum cell_cmd {
@@ -106,9 +104,7 @@ struct cell_start_args {
 	char mnt_tmpfs;
 	char newpts;
 	char newcgrp;
-	char share_dalvik_cache;
 	char sdcard_branch;
-	char wifiproxy;
 	char open_console;
 	char autoswitch;
 	char pid_file[MAX_PATH_LEN];
@@ -208,7 +204,6 @@ int recv_fd(int conn_fd);
 
 extern char *get_rw_path(const char *name);
 extern char *get_root_path(const char *name);
-extern int do_share_dalvik_cache(char *root_path);
 
 int mount_cell(char *name, int sdcard_mnt);
 int unmount_all(const char *root_path, int mount_fs);
