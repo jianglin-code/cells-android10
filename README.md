@@ -1,6 +1,6 @@
 # cells-android10
 
-cells --- 容器管理
+cells --- VP management deamon
 
 frameworks --- Android frameworks
 
